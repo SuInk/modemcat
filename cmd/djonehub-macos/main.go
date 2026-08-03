@@ -124,6 +124,11 @@ type app struct {
 
 	trafficMu        sync.Mutex
 	trafficBaselines map[string]networkByteCounters
+
+	hardwarePortsMu        sync.Mutex
+	hardwarePorts          []macHardwarePort
+	hardwarePortsError     error
+	hardwarePortsCheckedAt time.Time
 }
 
 type usbInterfaceStatus struct {
@@ -170,6 +175,11 @@ type macNetInterface struct {
 	Status string `json:"status"`
 	IPv4   string `json:"ipv4"`
 	Kind   string `json:"kind"`
+}
+
+type macHardwarePort struct {
+	Name   string
+	Device string
 }
 
 type macDefaultRoute struct {
@@ -1589,7 +1599,11 @@ func (a *app) networkDiagnostic(w http.ResponseWriter, _ *http.Request) {
 		Raw:           raw,
 		Errors:        errs,
 	}
-	diag.USBNetworkPresent = hasLikelyUSBNetworkInterface(diag.MacInterfaces)
+	hardwarePorts, hardwarePortsErr := a.currentMacHardwarePorts()
+	diag.USBNetworkPresent = selectUSBTrafficInterface(diag.MacInterfaces, diag.DefaultRoute, hardwarePorts) != ""
+	if hardwarePortsErr != nil {
+		errs["mac_hardware_ports"] = hardwarePortsErr.Error()
+	}
 
 	commands := map[string]string{
 		"usbnet":  `AT+QCFG="usbnet"`,
@@ -1624,7 +1638,13 @@ func (a *app) networkTraffic(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	interfaces := discoverMacNetworkInterfaces()
-	name := selectUSBTrafficInterface(interfaces, discoverMacDefaultRoute())
+	hardwarePorts, err := a.currentMacHardwarePorts()
+	if err != nil {
+		snapshot.Error = "识别 Baiwang USB 网卡失败"
+		writeJSON(w, http.StatusOK, snapshot)
+		return
+	}
+	name := selectUSBTrafficInterface(interfaces, discoverMacDefaultRoute(), hardwarePorts)
 	if name == "" {
 		writeJSON(w, http.StatusOK, snapshot)
 		return
@@ -1672,6 +1692,8 @@ func sessionTrafficFromCounters(current, baseline networkByteCounters) (rx, tx, 
 func (a *app) check4GRoute(w http.ResponseWriter, _ *http.Request) {
 	route := discoverMacDefaultRoute()
 	interfaces := discoverMacNetworkInterfaces()
+	hardwarePorts, _ := a.currentMacHardwarePorts()
+	usbInterface := selectUSBTrafficInterface(interfaces, route, hardwarePorts)
 	var active *macNetInterface
 	for i := range interfaces {
 		if interfaces[i].Name == route.Interface {
@@ -1687,7 +1709,7 @@ func (a *app) check4GRoute(w http.ResponseWriter, _ *http.Request) {
 		})
 		return
 	}
-	if active != nil && active.Name != "en0" && active.Kind == "ethernet" && active.Status == "active" {
+	if active != nil && active.Name == usbInterface {
 		writeJSON(w, http.StatusOK, networkCheckResult{
 			OK:      true,
 			Summary: "当前正在走 4G 模块",
@@ -1921,25 +1943,71 @@ func classifyMacInterfaceName(name string) string {
 	}
 }
 
-func hasLikelyUSBNetworkInterface(interfaces []macNetInterface) bool {
-	for _, item := range interfaces {
-		if item.Kind == "ethernet" && item.Name != "en0" && item.Status == "active" {
-			return true
-		}
+func discoverMacHardwarePorts() ([]macHardwarePort, error) {
+	out, err := exec.Command("/usr/sbin/networksetup", "-listallhardwareports").Output()
+	if err != nil {
+		return nil, err
 	}
-	return false
+	return parseMacHardwarePorts(string(out)), nil
 }
 
-func selectUSBTrafficInterface(interfaces []macNetInterface, route macDefaultRoute) string {
-	for _, item := range interfaces {
-		if item.Name == route.Interface && item.Kind == "ethernet" && item.Name != "en0" && item.Status == "active" {
-			return item.Name
+func (a *app) currentMacHardwarePorts() ([]macHardwarePort, error) {
+	a.hardwarePortsMu.Lock()
+	defer a.hardwarePortsMu.Unlock()
+	if !a.hardwarePortsCheckedAt.IsZero() && time.Since(a.hardwarePortsCheckedAt) < 5*time.Second {
+		return append([]macHardwarePort(nil), a.hardwarePorts...), a.hardwarePortsError
+	}
+	a.hardwarePorts, a.hardwarePortsError = discoverMacHardwarePorts()
+	a.hardwarePortsCheckedAt = time.Now()
+	return append([]macHardwarePort(nil), a.hardwarePorts...), a.hardwarePortsError
+}
+
+func parseMacHardwarePorts(out string) []macHardwarePort {
+	var ports []macHardwarePort
+	var current macHardwarePort
+	flush := func() {
+		if current.Name != "" && current.Device != "" {
+			ports = append(ports, current)
+		}
+		current = macHardwarePort{}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Hardware Port:"):
+			flush()
+			current.Name = strings.TrimSpace(strings.TrimPrefix(line, "Hardware Port:"))
+		case strings.HasPrefix(line, "Device:"):
+			current.Device = strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
 		}
 	}
+	flush()
+	return ports
+}
+
+func isDJIUSBHardwarePort(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(name, "baiwang") || strings.Contains(name, "dji")
+}
+
+func selectUSBTrafficInterface(interfaces []macNetInterface, route macDefaultRoute, hardwarePorts []macHardwarePort) string {
+	active := make(map[string]bool, len(interfaces))
 	for _, item := range interfaces {
-		if item.Kind == "ethernet" && item.Name != "en0" && item.Status == "active" {
-			return item.Name
+		active[item.Name] = item.Status == "active"
+	}
+	var candidates []string
+	for _, port := range hardwarePorts {
+		if isDJIUSBHardwarePort(port.Name) && active[port.Device] {
+			candidates = append(candidates, port.Device)
 		}
+	}
+	for _, device := range candidates {
+		if device == route.Interface {
+			return device
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
 	}
 	return ""
 }

@@ -19,7 +19,11 @@ func TestSelectUSBTrafficInterfacePrefersDefaultRoute(t *testing.T) {
 		{Name: "en8", Kind: "ethernet", Status: "active"},
 		{Name: "en9", Kind: "ethernet", Status: "active"},
 	}
-	if got := selectUSBTrafficInterface(interfaces, macDefaultRoute{Interface: "en9"}); got != "en9" {
+	hardwarePorts := []macHardwarePort{
+		{Name: "Baiwang Secondary", Device: "en8"},
+		{Name: "DJI 4G Modem", Device: "en9"},
+	}
+	if got := selectUSBTrafficInterface(interfaces, macDefaultRoute{Interface: "en9"}, hardwarePorts); got != "en9" {
 		t.Fatalf("selected interface = %q, want en9", got)
 	}
 }

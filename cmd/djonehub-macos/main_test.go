@@ -41,6 +41,72 @@ func TestParseUSBNetMode(t *testing.T) {
 	}
 }
 
+func TestParseMacHardwarePorts(t *testing.T) {
+	out := `An asterisk (*) denotes that a network service is disabled.
+
+Hardware Port: Wi-Fi
+Device: en1
+Ethernet Address: aa:bb:cc:dd:ee:ff
+
+Hardware Port: Baiwang
+Device: en8
+Ethernet Address: 00:11:22:33:44:55
+`
+	want := []macHardwarePort{{Name: "Wi-Fi", Device: "en1"}, {Name: "Baiwang", Device: "en8"}}
+	got := parseMacHardwarePorts(out)
+	if len(got) != len(want) {
+		t.Fatalf("parseMacHardwarePorts() returned %d ports, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("port %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestSelectUSBTrafficInterfaceRequiresDJIHardwarePort(t *testing.T) {
+	interfaces := []macNetInterface{
+		{Name: "en1", Status: "active", Kind: "ethernet", IPv4: "192.168.3.49"},
+		{Name: "en8", Status: "active", Kind: "ethernet", IPv4: "192.168.225.2"},
+	}
+	tests := []struct {
+		name  string
+		route macDefaultRoute
+		ports []macHardwarePort
+		want  string
+	}{
+		{
+			name:  "ordinary en1 is not treated as cellular",
+			route: macDefaultRoute{Interface: "en1"},
+			ports: []macHardwarePort{{Name: "Wi-Fi", Device: "en1"}},
+		},
+		{
+			name:  "Baiwang hardware port is selected",
+			route: macDefaultRoute{Interface: "en1"},
+			ports: []macHardwarePort{{Name: "Wi-Fi", Device: "en1"}, {Name: "Baiwang", Device: "en8"}},
+			want:  "en8",
+		},
+		{
+			name:  "DJI name is accepted case insensitively",
+			route: macDefaultRoute{Interface: "en8"},
+			ports: []macHardwarePort{{Name: "DJI 4G Modem", Device: "en8"}},
+			want:  "en8",
+		},
+		{
+			name:  "unrelated USB Ethernet is rejected",
+			route: macDefaultRoute{Interface: "en8"},
+			ports: []macHardwarePort{{Name: "USB 10/100/1000 LAN", Device: "en8"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectUSBTrafficInterface(interfaces, tt.route, tt.ports); got != tt.want {
+				t.Fatalf("selectUSBTrafficInterface() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseUSBATOperator(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

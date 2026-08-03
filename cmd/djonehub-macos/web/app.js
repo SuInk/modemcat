@@ -863,6 +863,7 @@ async function loadNetworkTraffic() {
       setValue("#traffic-session-rx", "--", "muted");
       setValue("#traffic-session-tx", "--", "muted");
       setValue("#traffic-session-total", "--", "muted");
+	  $("#traffic-session-total").title = sample.error || "未检测到 Baiwang USB 网卡";
       return;
     }
 
