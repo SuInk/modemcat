@@ -71,6 +71,7 @@
 
     <nav class="task-nav" aria-label="功能导航">
       <button class="tab active" data-view="sms"><span>短信</span><small>收件箱</small></button>
+      <button class="tab" data-view="scheduled"><span>定时任务</span><small>自动短信</small></button>
       <button class="tab" data-view="esim"><span>eSIM/卡片</span><small>Profile</small></button>
       <button class="tab" data-view="network"><span>网络</span><small>4G USB</small></button>
       <button class="tab" data-view="notifications"><span>提醒</span><small>Bark / TG</small></button>
@@ -93,6 +94,26 @@
       </div>
       <p id="sms-status" class="inline-status">尚未读取短信</p>
       <div id="sms-list" class="list empty">暂无短信</div>
+    </section>
+
+    <section id="scheduled" class="view">
+      <div class="view-intro scheduled-view-intro">
+        <div><span class="section-kicker">SCHEDULED SMS</span><h2>定时任务</h2></div>
+        <button id="new-scheduled-task" type="button">新建任务</button>
+      </div>
+      <div class="section-heading compact-heading">
+        <div>
+          <h2>任务列表</h2>
+          <p id="scheduled-task-status" class="inline-status">正在读取任务</p>
+        </div>
+        <button id="refresh-scheduled-tasks" class="secondary compact" type="button">刷新</button>
+      </div>
+      <div id="scheduled-task-list" class="scheduled-task-grid empty">暂无任务</div>
+      <div class="section-heading">
+        <h2>执行历史</h2>
+        <small id="scheduled-history-count">0 条</small>
+      </div>
+      <div id="scheduled-run-list" class="list empty">暂无执行记录</div>
     </section>
 
     <section id="esim" class="view">

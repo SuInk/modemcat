@@ -327,6 +327,8 @@ func eventEnabled(cfg notificationConfig, kind string) bool {
 		return cfg.NotifyIncomingCall
 	case "missed_call":
 		return cfg.NotifyMissedCall
+	case "scheduled_task_success", "scheduled_task_failure":
+		return true
 	case "test":
 		return true
 	default:

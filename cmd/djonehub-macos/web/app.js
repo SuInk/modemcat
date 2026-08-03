@@ -12,6 +12,8 @@ let callHistoryRenderSignature = "";
 let notificationSettingsInFlight = false;
 let notificationActionInFlight = false;
 let notificationEventSource = null;
+let scheduledTasksInFlight = false;
+let scheduledTaskRenderSignature = "";
 
 function setThemePreference(theme) {
   if (theme === "light" || theme === "dark") {
@@ -106,20 +108,31 @@ function showModal({ title, message = "", fields = [], confirmLabel = "确定", 
     label.className = "modal-field";
     const caption = document.createElement("span");
     caption.textContent = field.label;
-    const input = document.createElement("input");
-    input.name = field.name;
-    input.value = field.value || "";
-    input.placeholder = field.placeholder || "";
-    input.autocomplete = "off";
-    if (field.required) input.required = true;
-    label.append(caption, input);
+    const control = document.createElement(field.type === "textarea" ? "textarea" : "input");
+    control.name = field.name;
+    control.autocomplete = field.autocomplete || "off";
+    if (field.type === "checkbox") {
+      label.classList.add("modal-checkbox");
+      control.type = "checkbox";
+      control.checked = Boolean(field.checked);
+      label.append(control, caption);
+      return label;
+    }
+    if (control instanceof HTMLInputElement) control.type = field.type || "text";
+    control.value = field.value ?? "";
+    control.placeholder = field.placeholder || "";
+    if (field.required) control.required = true;
+    if (field.min !== undefined) control.min = String(field.min);
+    if (field.max !== undefined) control.max = String(field.max);
+    if (field.maxLength !== undefined) control.maxLength = Number(field.maxLength);
+    label.append(caption, control);
     return label;
   }));
   confirmButton.textContent = confirmLabel;
   confirmButton.className = danger ? "danger modal-danger" : "";
   modal.hidden = false;
   document.body.classList.add("modal-open");
-  const firstInput = fieldsElement.querySelector("input");
+  const firstInput = fieldsElement.querySelector("input:not([type=checkbox]), textarea, input");
   setTimeout(() => (firstInput || confirmButton).focus(), 0);
   return new Promise((resolve) => { modalResolve = resolve; });
 }
@@ -127,8 +140,8 @@ function showModal({ title, message = "", fields = [], confirmLabel = "确定", 
 $("#modal-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const values = {};
-  event.currentTarget.querySelectorAll(".modal-fields input").forEach((input) => {
-    values[input.name] = input.value.trim();
+  event.currentTarget.querySelectorAll(".modal-fields input, .modal-fields textarea").forEach((input) => {
+    values[input.name] = input.type === "checkbox" ? input.checked : input.value.trim();
   });
   closeModal(values);
 });
@@ -300,6 +313,265 @@ async function loadSMS() {
   }
 }
 
+function formatScheduledTime(value) {
+  const timestamp = Number(value || 0);
+  if (!timestamp) return "--";
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? "--" : date.toLocaleString();
+}
+
+function scheduledTaskState(task) {
+  if (task.running || task.last_run_status === "running") return { label: "执行中", tone: "running" };
+  if (!task.enabled) return { label: "已暂停", tone: "paused" };
+  if (task.last_run_status === "failed") return { label: "上次失败", tone: "failed" };
+  if (task.last_run_status === "success") return { label: "运行中 · 上次成功", tone: "success" };
+  return { label: "运行中", tone: "running" };
+}
+
+function scheduledTaskPayload(task, enabled = task.enabled) {
+  return {
+    name: task.name,
+    enabled: Boolean(enabled),
+    interval_days: Number(task.interval_days),
+    run_time: task.run_time,
+    phone_number: task.phone_number,
+    message: task.message,
+  };
+}
+
+function scheduledMetaItem(label, value) {
+  const item = document.createElement("div");
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  const content = document.createElement("strong");
+  content.textContent = value || "--";
+  item.append(caption, content);
+  return item;
+}
+
+async function toggleScheduledTask(task, enabled, checkbox) {
+  checkbox.disabled = true;
+  try {
+    await api(`/api/scheduled-tasks/${encodeURIComponent(task.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(scheduledTaskPayload(task, enabled)),
+    });
+    notice(enabled ? "任务已启用" : "任务已暂停");
+    scheduledTaskRenderSignature = "";
+    await loadScheduledTasks();
+  } catch (error) {
+    checkbox.checked = !enabled;
+    notice(error.message);
+  } finally {
+    checkbox.disabled = false;
+  }
+}
+
+async function openScheduledTaskEditor(task = null) {
+  const values = await showModal({
+    title: task ? "编辑定时任务" : "新建定时任务",
+    fields: [
+      { name: "name", label: "任务名称", value: task?.name || "", placeholder: "例如：90 天流量查询", required: true, maxLength: 80 },
+      { name: "enabled", label: "启用此任务", type: "checkbox", checked: task?.enabled ?? false },
+      { name: "interval_days", label: "执行间隔（天）", type: "number", value: task?.interval_days ?? 90, min: 1, max: 3650, required: true },
+      { name: "run_time", label: "每天执行时间", type: "time", value: task?.run_time || "08:00", required: true },
+      { name: "phone_number", label: "目标号码", type: "tel", value: task?.phone_number || "", placeholder: "10086", required: true, maxLength: 40 },
+      { name: "message", label: "短信内容", type: "textarea", value: task?.message || "", placeholder: "短信内容", required: true, maxLength: 1000 },
+    ],
+    confirmLabel: task ? "保存任务" : "创建任务",
+  });
+  if (!values) return;
+  const payload = {
+    name: values.name,
+    enabled: Boolean(values.enabled),
+    interval_days: Number(values.interval_days),
+    run_time: values.run_time,
+    phone_number: values.phone_number,
+    message: values.message,
+  };
+  try {
+    const path = task ? `/api/scheduled-tasks/${encodeURIComponent(task.id)}` : "/api/scheduled-tasks";
+    await api(path, {
+      method: task ? "PUT" : "POST",
+      body: JSON.stringify(payload),
+    });
+    notice(task ? "任务已更新" : "任务已创建");
+    scheduledTaskRenderSignature = "";
+    await loadScheduledTasks();
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+async function runScheduledTaskNow(task) {
+  const confirmed = await showModal({
+    title: "立即执行任务",
+    message: `将立即向 ${task.phone_number} 发送“${task.name}”任务中的短信。`,
+    confirmLabel: "立即执行",
+  });
+  if (!confirmed) return;
+  try {
+    await api(`/api/scheduled-tasks/${encodeURIComponent(task.id)}/run`, {
+      method: "POST",
+    });
+    notice("任务已开始执行");
+    scheduledTaskRenderSignature = "";
+    await loadScheduledTasks();
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+async function deleteScheduledTask(task) {
+  const confirmed = await showModal({
+    title: "删除定时任务",
+    message: `确定删除“${task.name}”吗？已有执行历史会保留。`,
+    confirmLabel: "删除",
+    danger: true,
+  });
+  if (!confirmed) return;
+  try {
+    await api(`/api/scheduled-tasks/${encodeURIComponent(task.id)}`, { method: "DELETE" });
+    notice("任务已删除");
+    scheduledTaskRenderSignature = "";
+    await loadScheduledTasks();
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+function renderScheduledTaskCard(task) {
+  const card = document.createElement("article");
+  card.className = "scheduled-task-card";
+  const header = document.createElement("div");
+  header.className = "scheduled-task-header";
+  const title = document.createElement("div");
+  title.className = "scheduled-task-title";
+  const name = document.createElement("strong");
+  name.textContent = task.name;
+  const stateInfo = scheduledTaskState(task);
+  const state = document.createElement("span");
+  state.className = `scheduled-task-state ${stateInfo.tone}`;
+  state.textContent = stateInfo.label;
+  title.append(name, state);
+  const toggle = document.createElement("label");
+  toggle.className = "compact-toggle";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = Boolean(task.enabled);
+  checkbox.disabled = Boolean(task.running);
+  checkbox.setAttribute("aria-label", `${task.enabled ? "暂停" : "启用"}${task.name}`);
+  checkbox.addEventListener("change", () => toggleScheduledTask(task, checkbox.checked, checkbox));
+  const toggleText = document.createElement("span");
+  toggleText.textContent = "启用";
+  toggle.append(checkbox, toggleText);
+  header.append(title, toggle);
+
+  const body = document.createElement("div");
+  body.className = "scheduled-task-body";
+  const meta = document.createElement("div");
+  meta.className = "scheduled-task-meta";
+  meta.append(
+    scheduledMetaItem("执行计划", `每 ${task.interval_days} 天 · ${task.run_time}`),
+    scheduledMetaItem("目标号码", task.phone_number),
+    scheduledMetaItem("下次执行", task.enabled ? formatScheduledTime(task.next_run_at) : "已暂停"),
+    scheduledMetaItem("上次执行", formatScheduledTime(task.last_run_at)),
+  );
+  const message = document.createElement("p");
+  message.className = "scheduled-task-message";
+  message.textContent = task.message;
+  body.append(meta, message);
+  if (task.last_error) {
+    const error = document.createElement("p");
+    error.className = "scheduled-task-error";
+    error.textContent = `最近失败：${task.last_error}`;
+    body.append(error);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "scheduled-task-actions";
+  const run = document.createElement("button");
+  run.type = "button";
+  run.className = "secondary compact";
+  run.textContent = "立即执行";
+  run.disabled = Boolean(task.running);
+  run.addEventListener("click", () => runScheduledTaskNow(task));
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "secondary compact";
+  edit.textContent = "编辑";
+  edit.disabled = Boolean(task.running);
+  edit.addEventListener("click", () => openScheduledTaskEditor(task));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "danger compact";
+  remove.textContent = "删除";
+  remove.disabled = Boolean(task.running);
+  remove.addEventListener("click", () => deleteScheduledTask(task));
+  actions.append(run, edit, remove);
+  body.append(actions);
+  card.append(header, body);
+  return card;
+}
+
+function renderScheduledRun(run) {
+  const row = document.createElement("article");
+  row.className = "item";
+  const name = document.createElement("strong");
+  name.textContent = run.task_name || "已删除任务";
+  const detail = document.createElement("p");
+  const status = document.createElement("span");
+  status.className = `scheduled-run-status ${run.status}`;
+  status.textContent = run.status === "success" ? "成功" : "失败";
+  const trigger = run.trigger === "manual" ? "立即执行" : "自动执行";
+  const result = run.status === "success" ? `${run.segments || 0} 个短信分段` : (run.error || "未知错误");
+  detail.append(status, document.createTextNode(` · ${trigger} · ${result}`));
+  const time = document.createElement("time");
+  time.textContent = formatScheduledTime(run.ended_at);
+  row.append(name, detail, time);
+  return row;
+}
+
+function renderScheduledTasks(snapshot) {
+  const signature = JSON.stringify(snapshot);
+  if (signature === scheduledTaskRenderSignature) return;
+  scheduledTaskRenderSignature = signature;
+  const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
+  const history = Array.isArray(snapshot.history) ? snapshot.history : [];
+  const runningCount = tasks.filter((task) => task.running).length;
+  const enabledCount = tasks.filter((task) => task.enabled).length;
+  $("#scheduled-task-status").textContent = `${tasks.length} 个任务 · ${enabledCount} 个启用${runningCount ? ` · ${runningCount} 个执行中` : ""}`;
+  const list = $("#scheduled-task-list");
+  if (!tasks.length) {
+    list.className = "scheduled-task-grid empty";
+    list.textContent = "暂无任务";
+  } else {
+    list.className = "scheduled-task-grid";
+    list.replaceChildren(...tasks.map(renderScheduledTaskCard));
+  }
+  $("#scheduled-history-count").textContent = `${history.length} 条`;
+  const runList = $("#scheduled-run-list");
+  if (!history.length) {
+    runList.className = "list empty";
+    runList.textContent = "暂无执行记录";
+  } else {
+    runList.className = "list";
+    runList.replaceChildren(...history.map(renderScheduledRun));
+  }
+}
+
+async function loadScheduledTasks() {
+  if (scheduledTasksInFlight) return;
+  scheduledTasksInFlight = true;
+  try {
+    renderScheduledTasks(await api("/api/scheduled-tasks"));
+  } catch (error) {
+    $("#scheduled-task-status").textContent = `读取失败：${error.message}`;
+  } finally {
+    scheduledTasksInFlight = false;
+  }
+}
+
 function callStateLabel(call) {
   switch (call?.state) {
     case "incoming": return "正在来电";
@@ -448,6 +720,9 @@ function connectNotificationEvents() {
       const includeNumber = $("#include-caller-number").checked;
       notice(includeNumber && event.number ? `${event.title}：${event.number}` : event.title);
       void loadCalls();
+    } else if (event.kind === "scheduled_task_success" || event.kind === "scheduled_task_failure") {
+      notice(event.title || "定时任务执行完成");
+      void loadScheduledTasks();
     }
   };
 }
@@ -1213,6 +1488,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     else setESIMHealthPolling(false);
     if (tab.dataset.view === "network") loadNetwork();
     if (tab.dataset.view === "notifications") loadNotificationSettings();
+    if (tab.dataset.view === "scheduled") loadScheduledTasks();
   });
 });
 
@@ -1292,6 +1568,18 @@ $("#refresh-sms").addEventListener("click", async () => {
   } catch (error) {
     $("#sms-status").textContent = `读取短信失败：${error.message}`;
     notice(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#new-scheduled-task").addEventListener("click", () => openScheduledTaskEditor());
+$("#refresh-scheduled-tasks").addEventListener("click", async () => {
+  const button = $("#refresh-scheduled-tasks");
+  button.disabled = true;
+  try {
+    scheduledTaskRenderSignature = "";
+    await loadScheduledTasks();
+    notice("定时任务已刷新");
   } finally {
     button.disabled = false;
   }
@@ -1442,6 +1730,7 @@ $("#test-notifications").addEventListener("click", async () => {
 
 loadStatus();
 loadSMS();
+loadScheduledTasks();
 loadCalls();
 loadNotificationSettings();
 updateBrowserNotificationStatus();
@@ -1449,4 +1738,5 @@ connectNotificationEvents();
 setNetworkTrafficPolling(true);
 setInterval(loadStatus, 10000);
 setInterval(loadSMS, 5000);
+setInterval(loadScheduledTasks, 5000);
 setInterval(loadCalls, 2000);

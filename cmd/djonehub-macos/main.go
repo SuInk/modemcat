@@ -112,8 +112,9 @@ type app struct {
 	callLastPollError string
 	callConfigured    bool
 
-	notifications *notificationService
-	eventHub      *eventHub
+	notifications  *notificationService
+	eventHub       *eventHub
+	scheduledTasks *scheduledTaskService
 
 	profileNotesMu     sync.Mutex
 	profileNotes       map[string]profileNote
@@ -363,6 +364,7 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 
 func serve(instance *app, listen string) {
 	instance.initNotifications()
+	instance.initScheduledTasks()
 	instance.usbATMu.RLock()
 	initialUSBAT := instance.usbAT
 	instance.usbATMu.RUnlock()
@@ -375,6 +377,7 @@ func serve(instance *app, listen string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	instance.notifications.start(ctx)
+	instance.scheduledTasks.start(ctx)
 	if !instance.demo {
 		go instance.startCallPoller(ctx)
 		if instance.modem == nil {
@@ -832,6 +835,11 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /api/notifications", a.updateNotificationSettings)
 	mux.HandleFunc("POST /api/notifications/test", a.testNotifications)
 	mux.HandleFunc("GET /api/events", a.notificationEvents)
+	mux.HandleFunc("GET /api/scheduled-tasks", a.scheduledTaskSnapshot)
+	mux.HandleFunc("POST /api/scheduled-tasks", a.createScheduledTask)
+	mux.HandleFunc("PUT /api/scheduled-tasks/{id}", a.updateScheduledTask)
+	mux.HandleFunc("DELETE /api/scheduled-tasks/{id}", a.deleteScheduledTask)
+	mux.HandleFunc("POST /api/scheduled-tasks/{id}/run", a.runScheduledTask)
 	mux.HandleFunc("POST /api/at", a.executeAT)
 	mux.HandleFunc("GET /api/network", a.networkDiagnostic)
 	mux.HandleFunc("GET /api/network/traffic", a.networkTraffic)

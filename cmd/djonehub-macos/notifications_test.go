@@ -367,6 +367,15 @@ func TestNotificationServicePublishesOnce(t *testing.T) {
 	}
 }
 
+func TestScheduledTaskResultsAlwaysReachConfiguredChannels(t *testing.T) {
+	cfg := notificationConfig{}
+	for _, kind := range []string{"scheduled_task_success", "scheduled_task_failure"} {
+		if !eventEnabled(cfg, kind) {
+			t.Fatalf("%s disabled by unrelated notification toggles", kind)
+		}
+	}
+}
+
 func TestSMSNotificationsSkipStartupBaselineAndDuplicates(t *testing.T) {
 	hub := newEventHub()
 	stream, stop := hub.subscribe()

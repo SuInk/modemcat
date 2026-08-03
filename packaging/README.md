@@ -76,6 +76,12 @@ WebUI 会显示来电和最近记录，并可拒接当前来电。提醒页面�
 
 通知凭据保存在 `~/Library/Application Support/DJOneHub/notifications.json`，文件权限为 `0600`。短信正文默认不发送给第三方，Bark 和 Telegram 也默认关闭。
 
+## 定时任务
+
+WebUI 可以按天数和本地时间周期发送短信，并支持启停、立即执行和查看最近 100 条执行记录。失败任务会在下一个指定时间重试；每次成功或失败都会发送到当前已启用且配置完整的浏览器、Bark 和 Telegram 通道。
+
+任务需要 DJOneHub 后台持续运行。配置与短信内容保存在 `~/Library/Application Support/DJOneHub/scheduled-tasks.json`，文件权限为 `0600`。
+
 本功能不配置 Wi-Fi Calling / VoWiFi。由于模块没有已验证可用的双向 USB 语音音频，WebUI 不提供接听或拨号。USB 忙于较长操作、固件不输出呼叫事件或来电极短时，提醒可能延迟或漏报。
 
 ## 当前限制
