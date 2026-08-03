@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -74,26 +76,44 @@ type modulePhonebookEntry struct {
 
 type app struct {
 	modem             *modem.Manager
+	atCommandOverride func(string, time.Duration) (string, error)
 	esimMu            sync.RWMutex
 	esim              *esim.Manager
 	esimSwitchAllowed bool
 	usbAT             *usbAT
+	usbATMu           sync.RWMutex
+	usbDeviceMu       sync.RWMutex
 	port              string
 	demo              bool
 	discoveryError    string
 	usbDevice         *usbDeviceStatus
 	usbATBackoffUntil time.Time
 	usbATBackoffErr   string
+	usbMissingScans   int
 
-	smsMu          sync.RWMutex
-	sms            []receivedSMS
-	smsSendMu      sync.Mutex
-	smsReassembler *smscodec.Reassembler
+	smsMu                 sync.RWMutex
+	sms                   []receivedSMS
+	smsSendMu             sync.Mutex
+	smsReassembler        *smscodec.Reassembler
+	smsNotificationsReady bool
 
 	smsPollInterval  time.Duration
 	smsAutoCleanupME bool
 	smsLastPoll      time.Time
 	smsLastPollError string
+
+	callMu            sync.RWMutex
+	callPollMu        sync.Mutex
+	callPollTrigger   chan struct{}
+	activeCalls       map[string]*callRecord
+	callHistory       []callRecord
+	callPollInterval  time.Duration
+	callLastPoll      time.Time
+	callLastPollError string
+	callConfigured    bool
+
+	notifications *notificationService
+	eventHub      *eventHub
 
 	profileNotesMu     sync.Mutex
 	profileNotes       map[string]profileNote
@@ -188,6 +208,9 @@ func main() {
 	flag.StringVar(&listen, "listen", "127.0.0.1:7575", "HTTP listen address")
 	flag.BoolVar(&demo, "demo", false, "run the web UI with simulated modem data")
 	flag.Parse()
+	if err := validateListenAddress(listen); err != nil {
+		log.Fatalf("invalid -listen address: %v", err)
+	}
 
 	if demo {
 		instance := newDemoApp()
@@ -210,6 +233,7 @@ func main() {
 				smsPollInterval:  8 * time.Second,
 				smsAutoCleanupME: true,
 				smsReassembler:   smscodec.NewReassembler(),
+				callPollInterval: 2 * time.Second,
 			}
 			if usbDevice != nil {
 				log.Printf("DJI USB device detected without AT serial port: %s %s (%s:%s)",
@@ -225,7 +249,6 @@ func main() {
 				instance.initUSBATESIMManager()
 			}
 			log.Printf("modem discovery skipped: %v", err)
-			go instance.startSMSPoller(context.Background())
 			serve(instance, listen)
 			return
 		}
@@ -249,8 +272,15 @@ func main() {
 		log.Fatalf("create modem manager: %v", err)
 	}
 
-	instance := &app{modem: manager, port: port, smsPollInterval: 8 * time.Second, smsAutoCleanupME: true}
+	instance := &app{
+		modem: manager, port: port,
+		smsPollInterval: 8 * time.Second, smsAutoCleanupME: true,
+		callPollInterval: 2 * time.Second,
+	}
 	manager.SetSMSCallback(instance.recordSMS)
+	manager.SetRingCallback(instance.triggerCallPoll)
+	manager.SetClipCallback(func(string) { instance.triggerCallPoll() })
+	manager.SetHangupCallback(instance.triggerCallPoll)
 	if err := manager.Start(); err != nil {
 		log.Fatalf("open modem on %s: %v", port, err)
 	}
@@ -273,7 +303,10 @@ func main() {
 		instance.installESIMManager(esimManager, false)
 	}
 
-	go manager.CheckAllSMS()
+	go func() {
+		manager.CheckAllSMS()
+		instance.markSMSNotificationsReady()
+	}()
 
 	serve(instance, listen)
 }
@@ -319,6 +352,11 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 }
 
 func serve(instance *app, listen string) {
+	instance.initNotifications()
+	instance.usbATMu.RLock()
+	initialUSBAT := instance.usbAT
+	instance.usbATMu.RUnlock()
+	instance.attachUSBATCallEvents(initialUSBAT)
 	server := &http.Server{
 		Addr:              listen,
 		Handler:           instance.routes(),
@@ -326,9 +364,17 @@ func serve(instance *app, listen string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	instance.notifications.start(ctx)
+	if !instance.demo {
+		go instance.startCallPoller(ctx)
+		if instance.modem == nil {
+			go instance.startSMSPoller(ctx)
+		}
+	}
 
 	if !instance.demo {
-		log.Printf("DJOneHub is using %s", instance.port)
+		port, _ := instance.transportSnapshot()
+		log.Printf("DJOneHub is using %s", port)
 	}
 	log.Printf("Open http://%s", listen)
 	serveErr := make(chan error, 1)
@@ -354,9 +400,11 @@ func serve(instance *app, listen string) {
 func newDemoApp() *app {
 	now := time.Now()
 	return &app{
-		demo:            true,
-		port:            "Demo · Quectel EG25-G",
-		smsPollInterval: 8 * time.Second,
+		demo:                  true,
+		port:                  "Demo · Quectel EG25-G",
+		smsPollInterval:       8 * time.Second,
+		callPollInterval:      2 * time.Second,
+		smsNotificationsReady: true,
 		sms: []receivedSMS{
 			{
 				Sender:    "10086",
@@ -537,13 +585,13 @@ func usbSpeedName(speed int) string {
 func (a *app) recordSMS(sender, content string, timestamp time.Time) {
 	a.mergeSMS([]receivedSMS{{
 		Sender: sender, Content: content, Timestamp: timestamp,
-	}})
+	}}, true)
 }
 
-func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
+func (a *app) mergeSMS(messages []receivedSMS, allowNotifications bool) (newCount int, total int) {
 	a.smsMu.Lock()
-	defer a.smsMu.Unlock()
 	seen := make(map[string]bool, len(a.sms)+len(messages))
+	var added []receivedSMS
 	for _, item := range a.sms {
 		seen[smsCacheKey(item)] = true
 	}
@@ -557,6 +605,7 @@ func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
 		}
 		seen[key] = true
 		a.sms = append(a.sms, item)
+		added = append(added, item)
 		newCount++
 	}
 	sort.SliceStable(a.sms, func(i, j int) bool {
@@ -565,7 +614,21 @@ func (a *app) mergeSMS(messages []receivedSMS) (newCount int, total int) {
 	if len(a.sms) > 500 {
 		a.sms = a.sms[:500]
 	}
-	return newCount, len(a.sms)
+	total = len(a.sms)
+	notify := allowNotifications && a.smsNotificationsReady
+	a.smsMu.Unlock()
+	if notify && a.notifications != nil {
+		for _, item := range added {
+			a.notifications.submit(newSMSEvent(item))
+		}
+	}
+	return newCount, total
+}
+
+func (a *app) markSMSNotificationsReady() {
+	a.smsMu.Lock()
+	a.smsNotificationsReady = true
+	a.smsMu.Unlock()
 }
 
 func smsCacheKey(item receivedSMS) string {
@@ -617,7 +680,8 @@ func (a *app) pollSMSOnce() error {
 		a.setSMSPollStatus(err)
 		return err
 	}
-	newCount, total := a.mergeSMS(messages)
+	newCount, total := a.mergeSMS(messages, true)
+	a.markSMSNotificationsReady()
 	if a.smsAutoCleanupME && len(messages) > 0 {
 		before, after, cleanupErr := a.clearUSBATSMSMemory("ME")
 		if cleanupErr != nil {
@@ -634,29 +698,41 @@ func (a *app) pollSMSOnce() error {
 }
 
 func (a *app) ensureUSBAT() error {
-	if a.demo || a.modem != nil || a.usbAT != nil {
+	if a.demo || a.modem != nil {
+		return nil
+	}
+	a.usbATMu.Lock()
+	if a.usbAT != nil {
+		a.usbATMu.Unlock()
 		return nil
 	}
 	if a.currentUSBDevice() == nil {
 		a.port = "未检测到 DJI USB 设备"
 		a.discoveryError = "DJI USB device is not connected"
+		a.usbATMu.Unlock()
 		return errors.New("DJI USB device is not connected")
 	}
 	if !a.usbATBackoffUntil.IsZero() && time.Now().Before(a.usbATBackoffUntil) {
 		if a.usbATBackoffErr != "" {
-			return fmt.Errorf("USB AT is cooling down after disconnect: %s", a.usbATBackoffErr)
+			err := fmt.Errorf("USB AT is cooling down after disconnect: %s", a.usbATBackoffErr)
+			a.usbATMu.Unlock()
+			return err
 		}
+		a.usbATMu.Unlock()
 		return errors.New("USB AT is cooling down after disconnect")
 	}
 	dev, err := openDJIUSBAT()
 	if err != nil {
+		a.usbATMu.Unlock()
 		return err
 	}
 	a.usbAT = dev
+	a.attachUSBATCallEvents(dev)
 	a.usbATBackoffUntil = time.Time{}
 	a.usbATBackoffErr = ""
 	a.port = dev.Description()
 	a.discoveryError = ""
+	a.usbATMu.Unlock()
 	log.Printf("USB AT bridge opened on DJI %s", dev.Description())
 	// The first open may fail while USB is re-enumerating. When a later poll
 	// succeeds, rebuild the eSIM service that startup could not create.
@@ -665,13 +741,12 @@ func (a *app) ensureUSBAT() error {
 }
 
 func (a *app) resetUSBATIfGone(err error) {
-	if err == nil || a.usbAT == nil {
+	if err == nil || !a.hasUSBAT() {
 		return
 	}
 	text := strings.ToUpper(err.Error())
 	if !strings.Contains(text, "NO_DEVICE") &&
-		!strings.Contains(text, "NOT_FOUND") &&
-		!strings.Contains(text, "USB AT COMMAND TIMED OUT") {
+		!strings.Contains(text, "NOT_FOUND") {
 		return
 	}
 	a.markUSBATDetached(err.Error())
@@ -680,19 +755,56 @@ func (a *app) resetUSBATIfGone(err error) {
 // markUSBATDetached clears state belonging to a physically removed module.
 // A later status/SMS poll will discover and open a newly connected module.
 func (a *app) markUSBATDetached(reason string) {
-	if a.usbAT != nil {
-		log.Printf("USB AT bridge detached; waiting for a new enumeration: %s", reason)
-		a.usbAT.Close()
-		a.usbAT = nil
-	}
-	a.usbDevice = nil
+	a.usbATMu.Lock()
+	dev := a.usbAT
+	a.usbAT = nil
 	a.port = "未检测到 DJI USB 设备"
 	a.discoveryError = "DJI USB device is not connected"
 	a.usbATBackoffUntil = time.Now().Add(2 * time.Second)
 	a.usbATBackoffErr = reason
+	a.usbATMu.Unlock()
+
+	if dev != nil {
+		log.Printf("USB AT bridge detached; waiting for a new enumeration: %s", reason)
+		dev.Close()
+	}
+	a.usbDeviceMu.Lock()
+	a.usbDevice = nil
+	a.usbDeviceMu.Unlock()
+	a.finishAllCalls(time.Now())
 	if manager, _ := a.currentESIMManager(); manager != nil {
 		manager.NotifyModemReset()
 	}
+}
+
+func (a *app) hasUSBAT() bool {
+	a.usbATMu.RLock()
+	defer a.usbATMu.RUnlock()
+	return a.usbAT != nil
+}
+
+func (a *app) commandUSBAT(command string, timeout time.Duration) (string, error) {
+	a.usbATMu.RLock()
+	defer a.usbATMu.RUnlock()
+	if a.usbAT == nil {
+		return "", errors.New("AT serial port is unavailable")
+	}
+	return a.usbAT.Command(command, timeout)
+}
+
+func (a *app) commandUSBATWithPrompt(command string, followUp []byte, timeout time.Duration) (string, error) {
+	a.usbATMu.RLock()
+	defer a.usbATMu.RUnlock()
+	if a.usbAT == nil {
+		return "", errors.New("AT serial port is unavailable")
+	}
+	return a.usbAT.CommandWithPrompt(command, followUp, timeout)
+}
+
+func (a *app) transportSnapshot() (string, string) {
+	a.usbATMu.RLock()
+	defer a.usbATMu.RUnlock()
+	return a.port, a.discoveryError
 }
 
 func (a *app) routes() http.Handler {
@@ -704,6 +816,12 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/sms/send", a.sendSMS)
 	mux.HandleFunc("POST /api/sms/refresh", a.refreshSMS)
 	mux.HandleFunc("POST /api/sms/clear-module", a.clearModuleSMS)
+	mux.HandleFunc("GET /api/calls/status", a.callStatus)
+	mux.HandleFunc("POST /api/calls/reject", a.rejectCall)
+	mux.HandleFunc("GET /api/notifications", a.notificationSettings)
+	mux.HandleFunc("PUT /api/notifications", a.updateNotificationSettings)
+	mux.HandleFunc("POST /api/notifications/test", a.testNotifications)
+	mux.HandleFunc("GET /api/events", a.notificationEvents)
 	mux.HandleFunc("POST /api/at", a.executeAT)
 	mux.HandleFunc("GET /api/network", a.networkDiagnostic)
 	mux.HandleFunc("GET /api/network/traffic", a.networkTraffic)
@@ -732,16 +850,94 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if !loopbackRequestHost(r.Host) {
+			writeError(w, http.StatusForbidden, "only loopback hosts are allowed")
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
+			(!sameOriginMutation(r) || !jsonMutation(r)) {
+			writeError(w, http.StatusForbidden, "cross-site requests are not allowed")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func sameOriginMutation(r *http.Request) bool {
+	if !loopbackRequestHost(r.Host) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host) && loopbackRequestHost(parsed.Host)
+}
+
+func jsonMutation(r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && strings.EqualFold(mediaType, "application/json")
+}
+
+func loopbackRequestHost(hostPort string) bool {
+	hostPort = strings.TrimSpace(hostPort)
+	if hostPort == "" {
+		return false
+	}
+	host := hostPort
+	if parsedHost, port, err := net.SplitHostPort(hostPort); err == nil {
+		portNumber, portErr := strconv.Atoi(port)
+		if portErr != nil || portNumber < 1 || portNumber > 65535 {
+			return false
+		}
+		host = parsedHost
+	} else if strings.HasPrefix(hostPort, "[") && strings.HasSuffix(hostPort, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(hostPort, "["), "]")
+	} else if strings.Count(hostPort, ":") == 1 {
+		return false
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func validateListenAddress(address string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return errors.New("expected HOST:PORT")
+	}
+	if port == "" {
+		return errors.New("port is required")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return errors.New("port must be between 1 and 65535")
+	}
+	if !loopbackRequestHost(host) {
+		return errors.New("WebUI must listen on localhost, 127.0.0.1, or ::1")
+	}
+	return nil
 }
 
 func (a *app) health(w http.ResponseWriter, _ *http.Request) {
 	usbDevice := a.currentUSBDevice()
 	esimManager, _ := a.currentESIMManager()
+	port, discoveryError := a.transportSnapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "port": a.port, "esim_available": a.demo || esimManager != nil, "demo": a.demo,
-		"usb_device": usbDevice, "discovery_error": a.discoveryError,
+		"ok": true, "port": port, "esim_available": a.demo || esimManager != nil, "demo": a.demo,
+		"usb_device": usbDevice, "discovery_error": discoveryError,
 	})
 }
 
@@ -769,13 +965,13 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 	if a.modem == nil {
 		// A libusb handle may survive a physical unplug. Refresh the macOS USB
 		// inventory before using it so the UI never reports a stale connection.
-		if a.usbAT != nil && a.currentUSBDevice() == nil {
+		if a.hasUSBAT() && a.currentUSBDevice() == nil && a.usbDeviceConfirmedMissing() {
 			a.markUSBATDetached("DJI USB device disconnected")
 		}
 		if err := a.ensureUSBAT(); err != nil {
 			log.Printf("USB AT retry failed: %v", err)
 		}
-		if a.usbAT != nil {
+		if a.hasUSBAT() {
 			status, err := a.usbATStatus()
 			if err == nil {
 				writeJSON(w, http.StatusOK, status)
@@ -785,6 +981,7 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 			log.Printf("USB AT status failed: %v", err)
 		}
 		usbDevice := a.currentUSBDevice()
+		_, discoveryError := a.transportSnapshot()
 		summary := "未发现 AT 串口"
 		operator := "未连接"
 		network := "不可用"
@@ -799,7 +996,7 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 			"network_mode":    network,
 			"sim_inserted":    false,
 			"hardware_status": summary,
-			"discovery_error": a.discoveryError,
+			"discovery_error": discoveryError,
 			"usb_device":      usbDevice,
 		})
 		return
@@ -809,26 +1006,40 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 
 func (a *app) currentUSBDevice() *usbDeviceStatus {
 	if a.modem != nil || a.demo {
+		a.usbDeviceMu.RLock()
+		defer a.usbDeviceMu.RUnlock()
 		return a.usbDevice
 	}
 	usbDevice := discoverDJIUSBDevice()
-	// Never retain the last successful scan: that is stale after an unplug.
+	a.usbDeviceMu.Lock()
+	defer a.usbDeviceMu.Unlock()
+	if usbDevice == nil {
+		a.usbMissingScans++
+	} else {
+		a.usbMissingScans = 0
+	}
 	a.usbDevice = usbDevice
 	return usbDevice
 }
 
+func (a *app) usbDeviceConfirmedMissing() bool {
+	a.usbDeviceMu.RLock()
+	defer a.usbDeviceMu.RUnlock()
+	return a.usbMissingScans >= 2
+}
+
 func (a *app) usbATStatus() (modem.DeviceStatus, error) {
-	firmwareResp, _ := a.usbAT.Command("ATI", 3*time.Second)
-	cpinResp, cpinErr := a.usbAT.Command("AT+CPIN?", 3*time.Second)
-	csqResp, _ := a.usbAT.Command("AT+CSQ", 3*time.Second)
-	ceregResp, _ := a.usbAT.Command("AT+CEREG?", 3*time.Second)
-	cregResp, _ := a.usbAT.Command("AT+CREG?", 3*time.Second)
-	_, _ = a.usbAT.Command("AT+COPS=3,2", 3*time.Second)
-	copsResp, _ := a.usbAT.Command("AT+COPS?", 3*time.Second)
-	qccidResp, _ := a.usbAT.Command("AT+QCCID", 3*time.Second)
-	cimiResp, _ := a.usbAT.Command("AT+CIMI", 3*time.Second)
-	qnwinfoResp, _ := a.usbAT.Command("AT+QNWINFO", 3*time.Second)
-	usbnetResp, _ := a.usbAT.Command(`AT+QCFG="usbnet"`, 3*time.Second)
+	firmwareResp, _ := a.commandUSBAT("ATI", 3*time.Second)
+	cpinResp, cpinErr := a.commandUSBAT("AT+CPIN?", 3*time.Second)
+	csqResp, _ := a.commandUSBAT("AT+CSQ", 3*time.Second)
+	ceregResp, _ := a.commandUSBAT("AT+CEREG?", 3*time.Second)
+	cregResp, _ := a.commandUSBAT("AT+CREG?", 3*time.Second)
+	_, _ = a.commandUSBAT("AT+COPS=3,2", 3*time.Second)
+	copsResp, _ := a.commandUSBAT("AT+COPS?", 3*time.Second)
+	qccidResp, _ := a.commandUSBAT("AT+QCCID", 3*time.Second)
+	cimiResp, _ := a.commandUSBAT("AT+CIMI", 3*time.Second)
+	qnwinfoResp, _ := a.commandUSBAT("AT+QNWINFO", 3*time.Second)
+	usbnetResp, _ := a.commandUSBAT(`AT+QCFG="usbnet"`, 3*time.Second)
 
 	if cpinErr != nil {
 		return modem.DeviceStatus{}, cpinErr
@@ -985,7 +1196,7 @@ func parseUSBATQNWInfo(resp string) (mode, duplex, band string, channel uint32) 
 }
 
 func (a *app) readUSBATSMS() ([]receivedSMS, error) {
-	if _, err := a.usbAT.Command("AT+CMGF=0", 3*time.Second); err != nil {
+	if _, err := a.commandUSBAT("AT+CMGF=0", 3*time.Second); err != nil {
 		return nil, fmt.Errorf("set SMS PDU mode: %w", err)
 	}
 	memories := []string{"SM", "ME"}
@@ -1017,10 +1228,10 @@ func (a *app) readUSBATSMS() ([]receivedSMS, error) {
 }
 
 func (a *app) readUSBATSMSFromMemory(memory string) ([]receivedSMS, error) {
-	if _, err := a.usbAT.Command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second); err != nil {
+	if _, err := a.commandUSBAT(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second); err != nil {
 		return nil, fmt.Errorf("select storage: %w", err)
 	}
-	resp, err := a.usbAT.Command("AT+CMGL=4", 15*time.Second)
+	resp, err := a.commandUSBAT("AT+CMGL=4", 15*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("list SMS: %w", err)
 	}
@@ -1059,15 +1270,15 @@ func (a *app) readUSBATSMSFromMemory(memory string) ([]receivedSMS, error) {
 }
 
 func (a *app) clearUSBATSMSMemory(memory string) (before, after int, err error) {
-	resp, err := a.usbAT.Command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
+	resp, err := a.commandUSBAT(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
 	if err != nil {
 		return 0, 0, fmt.Errorf("select storage: %w", err)
 	}
 	before = parseUSBATCPMSUsed(resp)
-	if _, err := a.usbAT.Command("AT+CMGD=1,4", 20*time.Second); err != nil {
+	if _, err := a.commandUSBAT("AT+CMGD=1,4", 20*time.Second); err != nil {
 		return before, 0, fmt.Errorf("delete messages: %w", err)
 	}
-	resp, err = a.usbAT.Command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
+	resp, err = a.commandUSBAT(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
 	if err != nil {
 		return before, 0, fmt.Errorf("recheck storage: %w", err)
 	}
@@ -1211,6 +1422,9 @@ func (a *app) clearModuleSMS(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) runATCommand(command string, timeout time.Duration) (string, error) {
+	if a.atCommandOverride != nil {
+		return a.atCommandOverride(command, timeout)
+	}
 	if a.demo {
 		responses := map[string]string{
 			"AT":                 "OK",
@@ -1233,10 +1447,10 @@ func (a *app) runATCommand(command string, timeout time.Duration) (string, error
 		if err := a.ensureUSBAT(); err != nil {
 			return "", err
 		}
-		if a.usbAT == nil {
+		if !a.hasUSBAT() {
 			return "", errors.New("AT serial port is unavailable")
 		}
-		response, err := a.usbAT.Command(command, timeout)
+		response, err := a.commandUSBAT(command, timeout)
 		if err != nil {
 			a.resetUSBATIfGone(err)
 		}
@@ -1258,7 +1472,7 @@ func (a *app) sendSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.demo {
-		a.recordSMS("已发送至 "+body.Phone, body.Message, time.Now())
+		a.mergeSMS([]receivedSMS{{Sender: "已发送至 " + body.Phone, Content: body.Message, Timestamp: time.Now()}}, false)
 		writeJSON(w, http.StatusOK, map[string]any{"sent": true, "segments": 1})
 		return
 	}
@@ -1287,11 +1501,11 @@ func (a *app) sendUSBATSMS(phone, message string) (int, error) {
 	if err := a.ensureUSBAT(); err != nil {
 		return 0, err
 	}
-	if a.usbAT == nil {
+	if !a.hasUSBAT() {
 		return 0, errors.New("AT serial port is unavailable")
 	}
 
-	modeResponse, err := a.usbAT.Command("AT+CMGF=0", 5*time.Second)
+	modeResponse, err := a.commandUSBAT("AT+CMGF=0", 5*time.Second)
 	if err != nil {
 		a.resetUSBATIfGone(err)
 		return 0, fmt.Errorf("set SMS PDU mode: %w", err)
@@ -1307,7 +1521,7 @@ func (a *app) sendUSBATSMS(phone, message string) (int, error) {
 	for i, tpdu := range tpdus {
 		pdu := append([]byte{0x00}, tpdu...)
 		payload := []byte(strings.ToUpper(hex.EncodeToString(pdu)) + "\x1a")
-		response, sendErr := a.usbAT.CommandWithPrompt(
+		response, sendErr := a.commandUSBATWithPrompt(
 			fmt.Sprintf("AT+CMGS=%d", tpduLengths[i]),
 			payload,
 			45*time.Second,

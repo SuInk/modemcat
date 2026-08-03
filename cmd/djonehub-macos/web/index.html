@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DJOneHub for macOS</title>
+  <title>DJOneHub WebUI</title>
   <script>
     try {
       const theme = localStorage.getItem("djonehub-theme") || localStorage.getItem("vohive-theme");
@@ -16,7 +16,7 @@
   <header class="app-header">
     <div class="brand-block">
       <div class="brand-line"><span class="brand-mark" aria-hidden="true"></span><span class="eyebrow">DJI 4G MODULE</span></div>
-      <h1>DJOneHub <span>macOS</span></h1>
+      <h1>DJOneHub <span>WebUI</span></h1>
       <p id="device-summary">正在连接大疆 4G 模块</p>
     </div>
     <div class="header-actions">
@@ -50,10 +50,30 @@
     <section id="hardware-details" class="hardware-details" hidden></section>
     <p id="workmode-status" class="inline-status" hidden></p>
 
+    <section id="call-panel" class="call-panel">
+      <div class="call-panel-heading">
+        <div><span class="section-kicker">CALL MONITOR</span><h2>来电监控</h2></div>
+        <small id="call-monitor-status">正在连接模块</small>
+      </div>
+      <div id="active-call" class="active-call" aria-live="assertive" aria-atomic="true" hidden>
+        <div>
+          <span id="active-call-label">正在来电</span>
+          <strong id="active-call-number">未知号码</strong>
+          <small id="active-call-time"></small>
+        </div>
+        <button id="reject-call" class="danger" type="button">拒接</button>
+      </div>
+      <details class="call-history-panel">
+        <summary><span>最近通话记录</span><small id="call-history-count">0 条</small></summary>
+        <div id="call-history" class="list empty">暂无记录</div>
+      </details>
+    </section>
+
     <nav class="task-nav" aria-label="功能导航">
       <button class="tab active" data-view="sms"><span>短信</span><small>收件箱</small></button>
       <button class="tab" data-view="esim"><span>eSIM/卡片</span><small>Profile</small></button>
       <button class="tab" data-view="network"><span>网络</span><small>4G USB</small></button>
+      <button class="tab" data-view="notifications"><span>提醒</span><small>Bark / TG</small></button>
       <button class="tab" data-view="at"><span>AT 调试</span><small>诊断</small></button>
     </nav>
 
@@ -144,6 +164,62 @@
       <p class="inline-status">模式 0 适合短信和 AT 管理；模式 1 是目前确认可用的 USB 网卡模式。切换 usbnet 后通常需要重启模块。</p>
       <h2 class="subheading">macOS 网络接口</h2>
       <div id="network-interfaces" class="list empty">尚未读取接口</div>
+    </section>
+
+    <section id="notifications" class="view">
+      <div class="view-intro"><div><span class="section-kicker">NOTIFICATIONS</span><h2>提醒通道</h2></div><p>Bark 与 Telegram 在 WebUI 关闭后仍可接收提醒。</p></div>
+      <form id="notification-form" class="settings-form">
+        <section class="settings-section">
+          <div class="settings-heading"><div><h2>事件</h2><p>选择需要进入提醒通道的事件。</p></div></div>
+          <div class="toggle-grid">
+            <label class="toggle-row"><input id="notify-incoming-call" type="checkbox"><span><strong>来电</strong><small>检测到响铃或呼叫等待</small></span></label>
+            <label class="toggle-row"><input id="notify-missed-call" type="checkbox"><span><strong>未接来电</strong><small>响铃结束且未接通</small></span></label>
+            <label class="toggle-row"><input id="notify-sms" type="checkbox"><span><strong>新短信</strong><small>忽略启动时读取的存量短信</small></span></label>
+            <label class="toggle-row"><input id="include-caller-number" type="checkbox"><span><strong>包含来电号码</strong><small>会发送给已启用的第三方通道</small></span></label>
+            <label class="toggle-row"><input id="include-sms-body" type="checkbox"><span><strong>包含短信正文</strong><small>关闭时只发送发件人</small></span></label>
+            <label class="toggle-row"><input id="browser-notifications" type="checkbox"><span><strong>浏览器提醒</strong><small id="browser-notification-status">仅在本页面打开时生效</small></span></label>
+          </div>
+        </section>
+
+        <section class="settings-section channel-section">
+          <div class="settings-heading">
+            <div><span class="section-kicker">BARK</span><h2>Bark</h2></div>
+            <label class="compact-toggle"><input id="bark-enabled" type="checkbox"><span>启用</span></label>
+          </div>
+          <div class="settings-grid">
+            <label><span>服务器</span><input id="bark-base-url" type="url" inputmode="url" autocomplete="url" placeholder="https://api.day.app"></label>
+            <label><span>Device Key</span><input id="bark-device-key" type="password" autocomplete="new-password" placeholder="留空则保留已保存的 Key"></label>
+          </div>
+          <div class="toggle-grid compact-grid">
+            <label class="toggle-row"><input id="bark-call-alarm" type="checkbox"><span><strong>来电持续响铃</strong><small>使用 Bark call 模式</small></span></label>
+            <label class="toggle-row"><input id="bark-clear-key" type="checkbox"><span><strong>清除 Device Key</strong><small id="bark-key-status">尚未配置</small></span></label>
+          </div>
+          <p id="bark-delivery-status" class="inline-status">尚未发送</p>
+        </section>
+
+        <section class="settings-section channel-section">
+          <div class="settings-heading">
+            <div><span class="section-kicker">TELEGRAM BOT</span><h2>Telegram</h2></div>
+            <label class="compact-toggle"><input id="telegram-enabled" type="checkbox"><span>启用</span></label>
+          </div>
+          <div class="settings-grid">
+            <label><span>Bot API</span><input id="telegram-base-url" type="url" inputmode="url" autocomplete="url" placeholder="https://api.telegram.org"></label>
+            <label><span>Chat ID</span><input id="telegram-chat-id" type="text" autocomplete="off" placeholder="数字 ID 或 @channel"></label>
+            <label class="span-two"><span>Bot Token</span><input id="telegram-bot-token" type="password" autocomplete="new-password" placeholder="留空则保留已保存的 Token"></label>
+          </div>
+          <div class="toggle-grid compact-grid">
+            <label class="toggle-row"><input id="telegram-protect-content" type="checkbox"><span><strong>保护转发</strong><small>禁止 Telegram 转发或保存消息</small></span></label>
+            <label class="toggle-row"><input id="telegram-clear-token" type="checkbox"><span><strong>清除 Bot Token</strong><small id="telegram-token-status">尚未配置</small></span></label>
+          </div>
+          <p id="telegram-delivery-status" class="inline-status">尚未发送</p>
+        </section>
+
+        <div class="settings-actions">
+          <button id="test-notifications" class="secondary" type="button">保存并测试</button>
+          <button id="save-notifications" type="submit">保存设置</button>
+        </div>
+        <p id="notification-save-status" class="inline-status">Bark 与 Telegram 默认关闭；凭据只保存在本机配置文件。</p>
+      </form>
     </section>
 
     <section id="at" class="view">

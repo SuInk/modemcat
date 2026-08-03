@@ -19,9 +19,17 @@ import (
 )
 
 const (
-	djiUSBVendorID  = 0x2ca3
-	djiUSBProductID = 0x4006
+	djiUSBVendorID        = 0x2ca3
+	djiUSBProductID       = 0x4006
+	usbATCallURCQueueSize = 32
+	usbATURCLineLimit     = 4096
 )
+
+type usbATCallURC struct {
+	kind       string
+	number     string
+	receivedAt time.Time
+}
 
 type usbAT struct {
 	ctx         *C.libusb_context
@@ -30,6 +38,13 @@ type usbAT struct {
 	endpointIn  byte
 	endpointOut byte
 	mu          sync.Mutex
+	urcLine     string
+
+	urcCallbackMu sync.RWMutex
+	urcCallback   func(kind, number string, receivedAt time.Time)
+	urcQueue      chan usbATCallURC
+	urcStop       chan struct{}
+	urcStopOnce   sync.Once
 }
 
 type usbATCandidate struct {
@@ -68,6 +83,7 @@ func openDJIUSBAT() (*usbAT, error) {
 			endpointOut: candidate.endpointOut,
 		}
 		if response, err := dev.Command("AT", 900*time.Millisecond); err == nil && atProbeSucceeded(response) {
+			dev.startCallURCDispatcher()
 			return dev, nil
 		} else {
 			if err == nil {
@@ -132,6 +148,7 @@ func (u *usbAT) Close() {
 	if u == nil {
 		return
 	}
+	u.stopCallURCDispatcher()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.handle == nil {
@@ -188,16 +205,14 @@ func (u *usbAT) Command(cmd string, timeout time.Duration) (string, error) {
 		if len(data) == 0 {
 			continue
 		}
+		u.consumeCallURCsLocked(data)
 		chunks = append(chunks, string(data))
 		joined := strings.Join(chunks, "")
 		if atResponseComplete(joined) {
 			return normalizeATResponse(joined), nil
 		}
 	}
-	if len(chunks) == 0 {
-		return "", errors.New("USB AT command timed out without response")
-	}
-	return normalizeATResponse(strings.Join(chunks, "")), nil
+	return timedOutATResponse(chunks)
 }
 
 // CommandWithPrompt executes an AT command that enters an interactive input
@@ -249,6 +264,7 @@ func (u *usbAT) CommandWithPrompt(cmd string, followUp []byte, timeout time.Dura
 		if len(data) == 0 {
 			continue
 		}
+		u.consumeCallURCsLocked(data)
 		response.Write(data)
 		joined := response.String()
 
@@ -281,11 +297,131 @@ func (u *usbAT) CommandWithPrompt(cmd string, followUp []byte, timeout time.Dura
 	return normalizeATResponse(response.String()), errors.New("USB interactive AT command timed out before completion")
 }
 
-var errUSBTimeout = errors.New("usb timeout")
+var (
+	errUSBTimeout              = errors.New("usb timeout")
+	errUSBATNoResponse         = errors.New("USB AT command timed out without response")
+	errUSBATIncompleteResponse = errors.New("USB AT command timed out before terminal result code")
+)
+
+func timedOutATResponse(chunks []string) (string, error) {
+	response := normalizeATResponse(strings.Join(chunks, ""))
+	if response == "" {
+		return "", errUSBATNoResponse
+	}
+	return response, errUSBATIncompleteResponse
+}
+
+func (u *usbAT) startCallURCDispatcher() {
+	if u == nil || u.urcQueue != nil {
+		return
+	}
+	u.urcQueue = make(chan usbATCallURC, usbATCallURCQueueSize)
+	u.urcStop = make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-u.urcStop:
+				return
+			case event := <-u.urcQueue:
+				u.urcCallbackMu.RLock()
+				callback := u.urcCallback
+				u.urcCallbackMu.RUnlock()
+				if callback != nil {
+					callback(event.kind, event.number, event.receivedAt)
+				}
+			}
+		}
+	}()
+}
+
+func (u *usbAT) stopCallURCDispatcher() {
+	if u == nil || u.urcStop == nil {
+		return
+	}
+	u.urcCallbackMu.Lock()
+	u.urcCallback = nil
+	u.urcCallbackMu.Unlock()
+	u.urcStopOnce.Do(func() { close(u.urcStop) })
+}
+
+// SetCallURCCallback installs a callback that always runs outside usbAT.mu.
+// Callbacks may schedule AT work, but must not perform it synchronously.
+func (u *usbAT) SetCallURCCallback(callback func(kind, number string, receivedAt time.Time)) {
+	if u == nil {
+		return
+	}
+	u.urcCallbackMu.Lock()
+	u.urcCallback = callback
+	u.urcCallbackMu.Unlock()
+}
+
+func (u *usbAT) consumeCallURCsLocked(data []byte) {
+	for _, current := range data {
+		switch current {
+		case '\r', '\n':
+			line := strings.TrimSpace(u.urcLine)
+			u.urcLine = ""
+			if kind, number, ok := parseUSBATCallURC(line); ok {
+				u.enqueueCallURCLocked(usbATCallURC{kind: kind, number: number, receivedAt: time.Now()})
+			}
+		default:
+			if len(u.urcLine) >= usbATURCLineLimit {
+				u.urcLine = ""
+				continue
+			}
+			u.urcLine += string(current)
+		}
+	}
+}
+
+func (u *usbAT) enqueueCallURCLocked(event usbATCallURC) {
+	if u.urcQueue == nil {
+		return
+	}
+	select {
+	case u.urcQueue <- event:
+	default:
+		// Repeated RING URCs may be dropped when the callback is delayed. CLCC
+		// remains the authoritative state reconciliation path.
+	}
+}
+
+func parseUSBATCallURC(line string) (kind, number string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	upper := strings.ToUpper(trimmed)
+	switch upper {
+	case "RING":
+		return callURCRing, "", true
+	case "NO CARRIER":
+		return callURCNoCarrier, "", true
+	case "BUSY":
+		return callURCBusy, "", true
+	case "NO ANSWER":
+		return callURCNoAnswer, "", true
+	}
+	if !strings.HasPrefix(upper, "+CLIP:") {
+		return "", "", false
+	}
+	rest := strings.TrimSpace(trimmed[len("+CLIP:"):])
+	if strings.HasPrefix(rest, "\"") {
+		if end := strings.IndexByte(rest[1:], '"'); end >= 0 {
+			return callURCClip, strings.TrimSpace(rest[1 : end+1]), true
+		}
+		return "", "", false
+	}
+	if comma := strings.IndexByte(rest, ','); comma >= 0 {
+		rest = rest[:comma]
+	}
+	return callURCClip, strings.Trim(strings.TrimSpace(rest), "\""), true
+}
 
 func (u *usbAT) drainLocked() {
 	for {
-		if _, err := u.bulkReadLocked(u.endpointIn, 80*time.Millisecond); err != nil {
+		data, err := u.bulkReadLocked(u.endpointIn, 80*time.Millisecond)
+		if len(data) > 0 {
+			u.consumeCallURCsLocked(data)
+		}
+		if err != nil {
 			return
 		}
 	}
@@ -344,18 +480,54 @@ func usbErrorName(rc C.int) string {
 }
 
 func atResponseComplete(resp string) bool {
-	normalized := strings.ReplaceAll(resp, "\r\n", "\n")
-	return strings.Contains(normalized, "\nOK\n") ||
-		strings.HasSuffix(normalized, "\nOK") ||
-		atResponseIsError(normalized)
+	for _, line := range atResponseLines(resp) {
+		if atTerminalResultLine(line) {
+			return true
+		}
+	}
+	return false
 }
 
 func atResponseIsError(resp string) bool {
-	normalized := strings.ToUpper(strings.ReplaceAll(resp, "\r\n", "\n"))
-	return strings.Contains(normalized, "\nERROR\n") ||
-		strings.HasSuffix(normalized, "\nERROR") ||
-		strings.Contains(normalized, "+CME ERROR:") ||
-		strings.Contains(normalized, "+CMS ERROR:")
+	for _, line := range atResponseLines(resp) {
+		if atErrorResultLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func atResponseLines(resp string) []string {
+	normalized := strings.ReplaceAll(resp, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	return strings.Split(normalized, "\n")
+}
+
+func atTerminalResultLine(line string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(line))
+	switch upper {
+	case "OK", "CONNECT", "ERROR", "NO CARRIER", "NO ANSWER", "BUSY", "NO DIALTONE", "NO DIAL TONE":
+		return true
+	default:
+		return strings.HasPrefix(upper, "CONNECT ") ||
+			atExtendedErrorResultLine(upper, "+CME ERROR") ||
+			atExtendedErrorResultLine(upper, "+CMS ERROR")
+	}
+}
+
+func atErrorResultLine(line string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(line))
+	switch upper {
+	case "ERROR", "NO CARRIER", "NO ANSWER", "BUSY", "NO DIALTONE", "NO DIAL TONE":
+		return true
+	default:
+		return atExtendedErrorResultLine(upper, "+CME ERROR") ||
+			atExtendedErrorResultLine(upper, "+CMS ERROR")
+	}
+}
+
+func atExtendedErrorResultLine(line, prefix string) bool {
+	return line == prefix || strings.HasPrefix(line, prefix+":")
 }
 
 func atResponseHasPrompt(resp string) bool {

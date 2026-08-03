@@ -5,6 +5,13 @@ let esimHealthInFlight = false;
 let networkTrafficTimer = null;
 let networkTrafficPrevious = null;
 let networkTrafficInFlight = false;
+let callPollInFlight = false;
+let activeCallIndex = null;
+let activeCallRenderSignature = "";
+let callHistoryRenderSignature = "";
+let notificationSettingsInFlight = false;
+let notificationActionInFlight = false;
+let notificationEventSource = null;
 
 function setThemePreference(theme) {
   if (theme === "light" || theme === "dark") {
@@ -291,6 +298,230 @@ async function loadSMS() {
     $("#sms-status").textContent = `读取列表失败：${error.message}`;
     notice(error.message);
   }
+}
+
+function callStateLabel(call) {
+  switch (call?.state) {
+    case "incoming": return "正在来电";
+    case "waiting": return "来电等待";
+    case "active": return "通话已接通";
+    case "dialing": return "正在拨号";
+    case "alerting": return "等待接听";
+    case "held": return "通话保持";
+    default: return "通话状态";
+  }
+}
+
+function renderCallHistory(rows) {
+  const list = $("#call-history");
+  const calls = Array.isArray(rows) ? rows : [];
+  const signature = JSON.stringify(calls);
+  if (signature === callHistoryRenderSignature) return;
+  callHistoryRenderSignature = signature;
+  $("#call-history-count").textContent = `${calls.length} 条`;
+  if (!calls.length) {
+    list.className = "list empty";
+    list.textContent = "暂无记录";
+    return;
+  }
+  list.className = "list";
+  list.replaceChildren(...calls.map((call) => {
+    const row = document.createElement("article");
+    row.className = "item call-history-item";
+    const number = document.createElement("strong");
+    number.textContent = call.number || "未知号码";
+    const state = document.createElement("p");
+    const endLabels = {
+      missed: "未接来电",
+      rejected: "已拒接",
+      disconnected: "连接中断，结果未知",
+      ended: "通话结束",
+    };
+    state.textContent = endLabels[call.end_reason] || (call.missed ? "未接来电" : "通话结束");
+    const time = document.createElement("time");
+    time.textContent = new Date(call.started_at).toLocaleString();
+    row.append(number, state, time);
+    return row;
+  }));
+}
+
+async function loadCalls() {
+  if (callPollInFlight) return;
+  callPollInFlight = true;
+  try {
+    const status = await api("/api/calls/status");
+    const active = status.active;
+    const panel = $("#active-call");
+    const rawIndex = active?.index;
+    activeCallIndex = rawIndex === null || rawIndex === undefined || !Number.isInteger(Number(rawIndex)) || Number(rawIndex) <= 0
+      ? null
+      : Number(rawIndex);
+    const interval = Number(status.poll_interval_s || 2);
+    $("#call-monitor-status").textContent = status.last_poll_error
+      ? `监听异常：${status.last_poll_error}`
+      : (status.polling ? `每 ${interval}s 检查来电` : "演示模式");
+    const activeSignature = active
+      ? JSON.stringify([active.index, active.state, active.number, active.started_at])
+      : "none";
+    if (activeSignature !== activeCallRenderSignature) {
+      activeCallRenderSignature = activeSignature;
+      if (active) {
+        panel.hidden = false;
+        $("#active-call-label").textContent = callStateLabel(active);
+        $("#active-call-number").textContent = active.number || "未知号码";
+        $("#active-call-time").textContent = new Date(active.started_at).toLocaleString();
+        const ringing = active.state === "incoming" || active.state === "waiting";
+        $("#reject-call").textContent = "拒接";
+        $("#reject-call").hidden = !ringing || activeCallIndex === null;
+      } else {
+        panel.hidden = true;
+      }
+    }
+    renderCallHistory(status.history);
+  } catch (error) {
+    $("#call-monitor-status").textContent = `监听异常：${error.message}`;
+  } finally {
+    callPollInFlight = false;
+  }
+}
+
+function browserNotificationsSupported() {
+  return window.isSecureContext && "Notification" in window;
+}
+
+function updateBrowserNotificationStatus() {
+  const toggle = $("#browser-notifications");
+  const status = $("#browser-notification-status");
+  if (!browserNotificationsSupported()) {
+    toggle.checked = false;
+    toggle.disabled = true;
+    status.textContent = "当前浏览器不可用";
+    return;
+  }
+  const enabled = localStorage.getItem("djonehub-browser-notifications") === "true" && Notification.permission === "granted";
+  toggle.checked = enabled;
+  status.textContent = Notification.permission === "denied"
+    ? "浏览器已拒绝权限"
+    : (enabled ? "已启用，仅在本页面打开时生效" : "仅在本页面打开时生效");
+}
+
+function showBrowserNotification(event) {
+  if (!browserNotificationsSupported()) return;
+  if (localStorage.getItem("djonehub-browser-notifications") !== "true") return;
+  if (Notification.permission !== "granted") return;
+  let title = event.title || "DJOneHub";
+  let body = event.body || "收到新的提醒";
+  if (event.kind === "sms" && !$("#include-sms-body").checked) {
+    body = `发件人：${event.sender || "未知号码"}`;
+  } else if ((event.kind === "incoming_call" || event.kind === "missed_call") &&
+    !$("#include-caller-number").checked) {
+    body = event.kind === "missed_call" ? "有一个未接来电" : "检测到新的来电";
+  }
+  try {
+    const popup = new Notification(title, {
+      body,
+      tag: event.id || undefined,
+    });
+    popup.onclick = () => {
+      window.focus();
+      popup.close();
+    };
+  } catch (error) {
+    $("#browser-notification-status").textContent = `浏览器提醒失败：${error.message}`;
+  }
+}
+
+function connectNotificationEvents() {
+  if (!("EventSource" in window) || notificationEventSource) return;
+  notificationEventSource = new EventSource("/api/events");
+  notificationEventSource.onmessage = (message) => {
+    let event;
+    try {
+      event = JSON.parse(message.data);
+    } catch (_) {
+      return;
+    }
+    showBrowserNotification(event);
+    if (event.kind === "sms") {
+      void loadSMS();
+    } else if (event.kind === "incoming_call" || event.kind === "missed_call") {
+      const includeNumber = $("#include-caller-number").checked;
+      notice(includeNumber && event.number ? `${event.title}：${event.number}` : event.title);
+      void loadCalls();
+    }
+  };
+}
+
+function deliveryStatusText(delivery) {
+  if (!delivery) return "尚未发送";
+  if (delivery.last_error) return `最近失败：${delivery.last_error}`;
+  const lastSuccess = new Date(delivery.last_success || "");
+  if (!Number.isNaN(lastSuccess.getTime()) && lastSuccess.getUTCFullYear() > 1) {
+    return `最近成功：${lastSuccess.toLocaleString()}`;
+  }
+  return "尚未发送";
+}
+
+async function loadNotificationSettings() {
+  if (notificationSettingsInFlight) return;
+  notificationSettingsInFlight = true;
+  try {
+    const settings = await api("/api/notifications");
+    $("#notify-sms").checked = Boolean(settings.notify_sms);
+    $("#include-sms-body").checked = Boolean(settings.include_sms_body);
+    $("#notify-incoming-call").checked = Boolean(settings.notify_incoming_call);
+    $("#notify-missed-call").checked = Boolean(settings.notify_missed_call);
+    $("#include-caller-number").checked = Boolean(settings.include_caller_number);
+
+    $("#bark-enabled").checked = Boolean(settings.bark?.enabled);
+    $("#bark-base-url").value = settings.bark?.base_url || "https://api.day.app";
+    $("#bark-call-alarm").checked = Boolean(settings.bark?.call_alarm);
+    $("#bark-key-status").textContent = settings.bark?.device_key_configured ? "已配置" : "尚未配置";
+    $("#bark-device-key").placeholder = settings.bark?.device_key_configured
+      ? "留空则保留已保存的 Key"
+      : "Bark Device Key";
+    $("#bark-delivery-status").textContent = deliveryStatusText(settings.bark?.delivery);
+
+    $("#telegram-enabled").checked = Boolean(settings.telegram?.enabled);
+    $("#telegram-base-url").value = settings.telegram?.base_url || "https://api.telegram.org";
+    $("#telegram-chat-id").value = settings.telegram?.chat_id || "";
+    $("#telegram-protect-content").checked = Boolean(settings.telegram?.protect_content);
+    $("#telegram-token-status").textContent = settings.telegram?.bot_token_configured ? "已配置" : "尚未配置";
+    $("#telegram-bot-token").placeholder = settings.telegram?.bot_token_configured
+      ? "留空则保留已保存的 Token"
+      : "Bot Token";
+    $("#telegram-delivery-status").textContent = deliveryStatusText(settings.telegram?.delivery);
+    updateBrowserNotificationStatus();
+  } catch (error) {
+    $("#notification-save-status").textContent = `读取设置失败：${error.message}`;
+  } finally {
+    notificationSettingsInFlight = false;
+  }
+}
+
+function notificationSettingsPayload() {
+  return {
+    notify_sms: $("#notify-sms").checked,
+    include_sms_body: $("#include-sms-body").checked,
+    notify_incoming_call: $("#notify-incoming-call").checked,
+    notify_missed_call: $("#notify-missed-call").checked,
+    include_caller_number: $("#include-caller-number").checked,
+    bark: {
+      enabled: $("#bark-enabled").checked,
+      base_url: $("#bark-base-url").value.trim(),
+      device_key: $("#bark-device-key").value.trim(),
+      clear_device_key: $("#bark-clear-key").checked,
+      call_alarm: $("#bark-call-alarm").checked,
+    },
+    telegram: {
+      enabled: $("#telegram-enabled").checked,
+      base_url: $("#telegram-base-url").value.trim(),
+      bot_token: $("#telegram-bot-token").value.trim(),
+      clear_bot_token: $("#telegram-clear-token").checked,
+      chat_id: $("#telegram-chat-id").value.trim(),
+      protect_content: $("#telegram-protect-content").checked,
+    },
+  };
 }
 
 function profileRows(value) {
@@ -980,6 +1211,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     if (tab.dataset.view === "esim") loadESIM();
     else setESIMHealthPolling(false);
     if (tab.dataset.view === "network") loadNetwork();
+    if (tab.dataset.view === "notifications") loadNotificationSettings();
   });
 });
 
@@ -1103,8 +1335,117 @@ $("#usbnet-mode-2").addEventListener("click", () => setUSBNetMode(2));
 $("#usbnet-mode-3").addEventListener("click", () => setUSBNetMode(3));
 $("#reboot-module").addEventListener("click", rebootModule);
 
+$("#reject-call").addEventListener("click", async () => {
+  const button = $("#reject-call");
+  const index = activeCallIndex;
+  if (!Number.isInteger(index)) {
+    notice("当前来电已结束");
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api("/api/calls/reject", {
+      method: "POST",
+      body: JSON.stringify({ index }),
+    });
+    notice("已发送拒接指令");
+    await loadCalls();
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function setNotificationActionsDisabled(disabled) {
+  notificationActionInFlight = disabled;
+  $("#save-notifications").disabled = disabled;
+  $("#test-notifications").disabled = disabled;
+}
+
+function clearNotificationCredentialInputs() {
+  $("#bark-device-key").value = "";
+  $("#telegram-bot-token").value = "";
+  $("#bark-clear-key").checked = false;
+  $("#telegram-clear-token").checked = false;
+}
+
+$("#browser-notifications").addEventListener("change", async (event) => {
+  if (!event.currentTarget.checked) {
+    localStorage.setItem("djonehub-browser-notifications", "false");
+    updateBrowserNotificationStatus();
+    return;
+  }
+  if (!browserNotificationsSupported()) {
+    updateBrowserNotificationStatus();
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  localStorage.setItem("djonehub-browser-notifications", String(permission === "granted"));
+  updateBrowserNotificationStatus();
+});
+
+$("#notification-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (notificationActionInFlight) return;
+  setNotificationActionsDisabled(true);
+  $("#notification-save-status").textContent = "正在保存...";
+  try {
+    await api("/api/notifications", {
+      method: "PUT",
+      body: JSON.stringify(notificationSettingsPayload()),
+    });
+    clearNotificationCredentialInputs();
+    $("#notification-save-status").textContent = "提醒设置已保存";
+    notice("提醒设置已保存");
+    await loadNotificationSettings();
+  } catch (error) {
+    $("#notification-save-status").textContent = `保存失败：${error.message}`;
+    notice(error.message);
+  } finally {
+    setNotificationActionsDisabled(false);
+  }
+});
+
+$("#test-notifications").addEventListener("click", async () => {
+  if (notificationActionInFlight) return;
+  let settingsSaved = false;
+  setNotificationActionsDisabled(true);
+  $("#notification-save-status").textContent = "正在保存提醒设置...";
+  try {
+    await api("/api/notifications", {
+      method: "PUT",
+      body: JSON.stringify(notificationSettingsPayload()),
+    });
+    settingsSaved = true;
+    clearNotificationCredentialInputs();
+    $("#notification-save-status").textContent = "设置已保存，正在发送测试提醒...";
+    const result = await api("/api/notifications/test", { method: "POST" });
+    const summary = Object.entries(result.results || {}).map(([channel, status]) => `${channel}: ${status}`).join(" · ");
+    await loadNotificationSettings();
+    const message = summary || "测试提醒已发送";
+    $("#notification-save-status").textContent = `设置已保存；测试结果：${message}`;
+    notice(message);
+  } catch (error) {
+    if (settingsSaved) {
+      await loadNotificationSettings();
+      $("#notification-save-status").textContent = `设置已保存，但测试失败：${error.message}`;
+    } else {
+      $("#notification-save-status").textContent = `保存失败：${error.message}`;
+    }
+    notice(settingsSaved ? `测试失败：${error.message}` : error.message);
+  } finally {
+    setNotificationActionsDisabled(false);
+  }
+});
+
 loadStatus();
 loadSMS();
+loadCalls();
+loadNotificationSettings();
+updateBrowserNotificationStatus();
+connectNotificationEvents();
 setNetworkTrafficPolling(true);
 setInterval(loadStatus, 10000);
 setInterval(loadSMS, 5000);
+setInterval(loadCalls, 2000);

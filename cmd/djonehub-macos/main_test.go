@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestPortScore(t *testing.T) {
 	tests := []struct {
@@ -88,5 +92,103 @@ func TestInitUSBATESIMManagerAfterDelayedUSBOpen(t *testing.T) {
 	managerAgain, _ := instance.currentESIMManager()
 	if managerAgain != manager {
 		t.Fatal("repeated USB AT recovery replaced the existing eSIM manager")
+	}
+}
+
+func TestSameOriginMutation(t *testing.T) {
+	tests := []struct {
+		name      string
+		host      string
+		origin    string
+		fetchSite string
+		want      bool
+	}{
+		{name: "CLI without browser headers", host: "127.0.0.1:7575", want: true},
+		{name: "same origin", host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", fetchSite: "same-origin", want: true},
+		{name: "cross origin", host: "127.0.0.1:7575", origin: "https://example.com", want: false},
+		{name: "cross site form", host: "127.0.0.1:7575", fetchSite: "cross-site", want: false},
+		{name: "DNS rebinding host", host: "evil.test:7575", origin: "http://evil.test:7575", fetchSite: "same-origin", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest("POST", "http://127.0.0.1:7575/api/test", nil)
+			request.Host = tt.host
+			if tt.origin != "" {
+				request.Header.Set("Origin", tt.origin)
+			}
+			if tt.fetchSite != "" {
+				request.Header.Set("Sec-Fetch-Site", tt.fetchSite)
+			}
+			if got := sameOriginMutation(request); got != tt.want {
+				t.Fatalf("sameOriginMutation() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoopbackRequestHost(t *testing.T) {
+	for _, tt := range []struct {
+		host string
+		want bool
+	}{
+		{host: "127.0.0.1:7575", want: true},
+		{host: "localhost:7575", want: true},
+		{host: "[::1]:7575", want: true},
+		{host: "evil.test:7575", want: false},
+		{host: "127.0.0.1.evil.test:7575", want: false},
+		{host: "0.0.0.0:7575", want: false},
+	} {
+		if got := loopbackRequestHost(tt.host); got != tt.want {
+			t.Errorf("loopbackRequestHost(%q) = %v, want %v", tt.host, got, tt.want)
+		}
+	}
+}
+
+func TestValidateListenAddress(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:7575", "localhost:7575", "[::1]:7575"} {
+		if err := validateListenAddress(address); err != nil {
+			t.Errorf("validateListenAddress(%q) = %v", address, err)
+		}
+	}
+	for _, address := range []string{":7575", "0.0.0.0:7575", "192.168.1.10:7575", "evil.test:7575"} {
+		if err := validateListenAddress(address); err == nil {
+			t.Errorf("validateListenAddress(%q) unexpectedly succeeded", address)
+		}
+	}
+}
+
+func TestSecurityHeadersRejectUnsafeRequests(t *testing.T) {
+	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	tests := []struct {
+		name        string
+		method      string
+		host        string
+		origin      string
+		contentType string
+		want        int
+	}{
+		{name: "loopback GET", method: http.MethodGet, host: "127.0.0.1:7575", want: http.StatusNoContent},
+		{name: "rebinding GET", method: http.MethodGet, host: "evil.test:7575", want: http.StatusForbidden},
+		{name: "same-origin JSON", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "application/json", want: http.StatusNoContent},
+		{name: "simple form", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "text/plain", want: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(tt.method, "http://127.0.0.1:7575/api/test", nil)
+			request.Host = tt.host
+			if tt.origin != "" {
+				request.Header.Set("Origin", tt.origin)
+			}
+			if tt.contentType != "" {
+				request.Header.Set("Content-Type", tt.contentType)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != tt.want {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, tt.want, recorder.Body.String())
+			}
+		})
 	}
 }

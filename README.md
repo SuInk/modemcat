@@ -1,6 +1,6 @@
 # DJOneHub
 
-DJOneHub 是一款面向**大疆第一代 4G 模块**的第三方 macOS 管理工具。它通过 USB 与模块现有接口通信，让模块无需虚拟机即可在 Mac 上完成短信收发、eSIM Profile 管理、AT 指令调试和 USB 4G 上网。
+DJOneHub 是一款面向**大疆第一代 4G 模块**的第三方 WebUI 管理工具。它通过 USB 与模块现有接口通信，让模块无需虚拟机即可在 Mac 上完成短信收发、eSIM Profile 管理、AT 指令调试和 USB 4G 上网。项目只提供浏览器管理页面和本地后台进程，不包含原生 macOS `.app` 或菜单栏界面。
 
 程序及管理页面均在本机运行，默认只监听 `127.0.0.1:7575`，不会主动把 SIM、短信或卡片资料上传到远程服务器。
 
@@ -14,6 +14,9 @@ DJOneHub 是一款面向**大疆第一代 4G 模块**的第三方 macOS 管理�
 | 模块自动识别 | 已实现 | 识别大疆第一代 4G 模块，并处理拔出、重新连接和换卡 |
 | 模块状态 | 已实现 | 显示运营商、信号、网络制式、SIM 状态和当前工作模式 |
 | 短信管理 | 已实现 | 接收、发送、自动轮询、验证码提取及模块旧短信清理 |
+| 来电提醒 | 已实现 | WebUI 显示来电、未接及中断记录，并可安全拒接当前来电 |
+| Bark / Telegram | 已实现 | 可选推送新短信、来电和未接来电；默认关闭 |
+| 浏览器提醒 | 已实现 | WebUI 打开时通过浏览器通知显示实时事件 |
 | eSIM Profile | 已实现 | 读取、下载、启用、改名和删除兼容 eUICC 卡片中的 Profile |
 | Profile 号码资料 | 已实现 | 将手动填写的号码保存到模块通讯录，并按 ICCID 关联 Profile |
 | USB 4G 上网 | 已实现 | 切换 USB 网卡模式，让 macOS 使用 SIM 卡流量上网 |
@@ -173,6 +176,32 @@ xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
 
 短信能否发送或接收，还取决于 SIM 套餐、漫游状态、运营商网络注册、短信中心配置和模块兼容性。
 
+### 来电与提醒
+
+WebUI 结合模块的 `RING/+CLIP` 事件与 `AT+CLCC` 校准显示来电号码、当前状态和最近记录，并提供拒接按钮。呼叫等待使用独立 AT 控制，避免拒接等待来电时挂断已接通的通话。USB 忙于较长的短信或卡片操作、模块固件不输出呼叫事件、或来电极短时，提醒仍可能延迟或漏报。
+
+最近通话记录只保存在当前 DJOneHub 进程内存中，重启服务后会清空。USB 连接中断时记录会标记为“结果未知”，不会误报为未接来电。
+
+当前实现只负责呼叫检测与 AT 控制。模块没有向 macOS 提供已验证可用的双向语音音频，因此不提供网页接听、网页拨号或已接通通话的网页挂断功能。
+
+“提醒”页面可以启用以下通道：
+
+- 浏览器提醒：只在 WebUI 页面打开时生效
+- Bark：支持普通提醒和来电持续响铃
+- Telegram Bot：向指定 Chat ID 发送提醒
+
+Bark 与 Telegram 默认关闭。通知设置保存在：
+
+```text
+~/Library/Application Support/DJOneHub/notifications.json
+```
+
+文件权限为 `0600`，Web API 不会回传 Bark Device Key 或 Telegram Bot Token。短信正文默认不会发送给第三方；可在提醒页面单独启用。使用公共 Bark 服务或 Telegram 前，应自行确认其隐私与网络可达性。Telegram Bot 需要先由目标用户发起 `/start`，或先加入目标群组。
+
+WebUI 强制只监听并接受本机回环地址，不能通过 `-listen 0.0.0.0` 暴露到局域网。修改类 API 还要求同源 JSON 请求。
+
+本功能不配置或启用 Wi-Fi Calling / VoWiFi。蜂窝来电是否到达模块仍取决于 SIM、运营商 IMS/VoLTE、漫游和模块固件支持。
+
 ### eSIM 与卡片管理
 
 该页面用于管理插在实体 SIM 卡槽中的兼容 eUICC/eSIM 卡片，不是用于管理 Mac 内置 eSIM。插入普通实体 SIM 时，可以忽略此页面。
@@ -303,6 +332,7 @@ rm -rf "$HOME/Library/Application Support/DJOneHub"
 - Xcode Command Line Tools
 - Go 1.26.3 或兼容版本
 - `pkg-config`
+- `libusb`（运行普通本地构建和测试时需要）
 - 可访问 GitHub Release 的网络，用于下载并校验官方 libusb 1.0.30 源码
 
 运行测试：

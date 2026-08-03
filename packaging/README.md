@@ -2,6 +2,8 @@
 
 适用于搭载 Apple M 系列芯片的 Mac，以及大疆一代 4G 模块（USB `2ca3:4006`）。
 
+本包只包含本地后台进程和浏览器 WebUI，不安装原生 macOS `.app` 或菜单栏界面。
+
 ## 安装（推荐）
 
 1. 将下载的 ZIP 完整解压，不要只单独拖出其中某个文件。
@@ -67,6 +69,14 @@ xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
 ```
 
 终端只显示启动、停止和错误摘要，不会持续刷出底层 USB 日志。
+
+## 来电与提醒
+
+WebUI 会显示来电和最近记录，并可拒接当前来电。提醒页面可分别启用浏览器通知、Bark 和 Telegram Bot；Bark 与 Telegram 在 WebUI 关闭后仍由本地后台发送。
+
+通知凭据保存在 `~/Library/Application Support/DJOneHub/notifications.json`，文件权限为 `0600`。短信正文默认不发送给第三方，Bark 和 Telegram 也默认关闭。
+
+本功能不配置 Wi-Fi Calling / VoWiFi。由于模块没有已验证可用的双向 USB 语音音频，WebUI 不提供接听或拨号。USB 忙于较长操作、固件不输出呼叫事件或来电极短时，提醒可能延迟或漏报。
 
 ## 当前限制
 
