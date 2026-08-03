@@ -89,6 +89,8 @@ xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
 
 WebUI 会显示来电和最近记录，并可拒接当前来电。提醒页面可分别启用浏览器通知、Bark 和 Telegram Bot；Bark 与 Telegram 在 WebUI 关闭后仍由本地后台发送。
 
+短信收件箱会把最近 500 条记录持久保存到 `~/Library/Application Support/DJOneHub/sms-inbox.json`，服务或 Mac 重启后仍会恢复，文件权限为 `0600`。模块 `ME` 自动清理默认关闭；手动清理模块 `ME` 不会删除本地历史或 SIM 卡 `SM` 短信。
+
 通知凭据保存在 `~/Library/Application Support/DJOneHub/notifications.json`，文件权限为 `0600`。短信正文默认不发送给第三方，Bark 和 Telegram 也默认关闭。
 
 ## 定时任务

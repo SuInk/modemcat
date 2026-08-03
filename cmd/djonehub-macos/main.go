@@ -96,6 +96,9 @@ type app struct {
 	smsSendMu             sync.Mutex
 	smsReassembler        *smscodec.Reassembler
 	smsNotificationsReady bool
+	smsStorePath          string
+	smsStoreError         string
+	smsStoreReady         bool
 
 	smsPollInterval  time.Duration
 	smsAutoCleanupME bool
@@ -250,7 +253,7 @@ func main() {
 				usbDevice:        usbDevice,
 				usbAT:            usbATDevice,
 				smsPollInterval:  8 * time.Second,
-				smsAutoCleanupME: true,
+				smsAutoCleanupME: false,
 				smsReassembler:   smscodec.NewReassembler(),
 				callPollInterval: 2 * time.Second,
 			}
@@ -293,7 +296,7 @@ func main() {
 
 	instance := &app{
 		modem: manager, port: port,
-		smsPollInterval: 8 * time.Second, smsAutoCleanupME: true,
+		smsPollInterval: 8 * time.Second, smsAutoCleanupME: false,
 		callPollInterval: 2 * time.Second,
 	}
 	manager.SetSMSCallback(instance.recordSMS)
@@ -373,6 +376,7 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 func serve(instance *app, listen, publicOrigin string) {
 	instance.publicOrigin = publicOrigin
 	instance.initAuth()
+	instance.initSMSInbox()
 	instance.initNotifications()
 	instance.initScheduledTasks()
 	instance.usbATMu.RLock()
@@ -611,7 +615,7 @@ func (a *app) recordSMS(sender, content string, timestamp time.Time) {
 	}}, true)
 }
 
-func (a *app) mergeSMS(messages []receivedSMS, allowNotifications bool) (newCount int, total int) {
+func (a *app) mergeSMS(messages []receivedSMS, allowNotifications bool) (newCount int, total int, persisted bool) {
 	a.smsMu.Lock()
 	seen := make(map[string]bool, len(a.sms)+len(messages))
 	var added []receivedSMS
@@ -634,18 +638,34 @@ func (a *app) mergeSMS(messages []receivedSMS, allowNotifications bool) (newCoun
 	sort.SliceStable(a.sms, func(i, j int) bool {
 		return a.sms[i].Timestamp.After(a.sms[j].Timestamp)
 	})
-	if len(a.sms) > 500 {
-		a.sms = a.sms[:500]
+	if len(a.sms) > maxSMSInboxMessages {
+		a.sms = a.sms[:maxSMSInboxMessages]
 	}
 	total = len(a.sms)
 	notify := allowNotifications && a.smsNotificationsReady
+	persisted = a.smsStoreReady && a.smsStoreError == ""
+	shouldPersist := a.smsStoreReady && (newCount > 0 || a.smsStoreError != "")
+	var persistErr error
+	if shouldPersist {
+		persistErr = persistSMSInbox(a.smsStorePath, a.sms)
+		if persistErr != nil {
+			a.smsStoreError = persistErr.Error()
+			persisted = false
+		} else {
+			a.smsStoreError = ""
+			persisted = true
+		}
+	}
 	a.smsMu.Unlock()
+	if persistErr != nil {
+		log.Printf("SMS inbox persistence failed: %v", persistErr)
+	}
 	if notify && a.notifications != nil {
 		for _, item := range added {
 			a.notifications.submit(newSMSEvent(item))
 		}
 	}
-	return newCount, total
+	return newCount, total, persisted
 }
 
 func (a *app) markSMSNotificationsReady() {
@@ -703,9 +723,9 @@ func (a *app) pollSMSOnce() error {
 		a.setSMSPollStatus(err)
 		return err
 	}
-	newCount, total := a.mergeSMS(messages, true)
+	newCount, total, persisted := a.mergeSMS(messages, true)
 	a.markSMSNotificationsReady()
-	if a.smsAutoCleanupME && len(messages) > 0 {
+	if shouldAutoCleanupME(a.smsAutoCleanupME, persisted, len(messages)) {
 		before, after, cleanupErr := a.clearUSBATSMSMemory("ME")
 		if cleanupErr != nil {
 			log.Printf("auto cleanup ME SMS failed: %v", cleanupErr)
@@ -718,6 +738,10 @@ func (a *app) pollSMSOnce() error {
 		log.Printf("SMS poll cached %d new message(s), total %d", newCount, total)
 	}
 	return nil
+}
+
+func shouldAutoCleanupME(enabled, persisted bool, messageCount int) bool {
+	return enabled && persisted && messageCount > 0
 }
 
 func (a *app) ensureUSBAT() error {
@@ -1443,6 +1467,8 @@ func (a *app) smsStatus(w http.ResponseWriter, _ *http.Request) {
 	lastPoll := a.smsLastPoll
 	lastPollError := a.smsLastPollError
 	count := len(a.sms)
+	storeReady := a.smsStoreReady
+	storeError := a.smsStoreError
 	a.smsMu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count":           count,
@@ -1451,6 +1477,8 @@ func (a *app) smsStatus(w http.ResponseWriter, _ *http.Request) {
 		"auto_cleanup_me": a.smsAutoCleanupME,
 		"last_poll":       lastPoll,
 		"last_poll_error": lastPollError,
+		"persistent":      storeReady && storeError == "",
+		"store_error":     storeError,
 	})
 }
 

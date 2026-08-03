@@ -81,7 +81,7 @@
     </nav>
 
     <section id="sms" class="view active">
-      <div class="view-intro"><div><span class="section-kicker">SIM MESSAGES</span><h2>短信收件箱</h2></div><p>自动轮询当前 SIM 与模块短信存储。</p></div>
+      <div class="view-intro"><div><span class="section-kicker">SIM MESSAGES</span><h2>短信收件箱</h2></div><p>自动轮询当前 SIM 与模块短信存储，并保存本地历史。</p></div>
       <form id="send-form" class="toolbar">
         <input id="phone" type="tel" placeholder="接收号码" autocomplete="tel" required>
         <input id="message" type="text" placeholder="短信内容" maxlength="1000" required>
@@ -90,7 +90,7 @@
       <div class="section-heading">
         <h2>收件箱</h2>
         <div class="heading-actions">
-          <button id="clear-module-sms" class="secondary danger" type="button">清空模块旧短信</button>
+          <button id="clear-module-sms" class="secondary danger" type="button">清空模块 ME</button>
           <button id="refresh-sms" class="secondary" type="button">读取短信</button>
         </div>
       </div>

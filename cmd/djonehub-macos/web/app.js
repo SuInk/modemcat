@@ -271,9 +271,11 @@ async function loadSMS() {
     const pollText = status.polling
       ? `自动轮询 ${status.poll_interval_s || 8}s`
       : "自动轮询未启用";
-    const cleanupText = status.auto_cleanup_me ? "自动清理 ME 已开启" : "自动清理 ME 未开启";
-    const errorText = status.last_poll_error ? ` · 最近错误：${status.last_poll_error}` : "";
-    $("#sms-status").textContent = `当前缓存 ${messages.length} 条短信 · ${pollText} · ${cleanupText}${errorText}`;
+    const cleanupText = status.auto_cleanup_me ? "ME 自动清理已开启" : "ME 自动清理已关闭";
+    const storageText = status.persistent ? `磁盘已保存 ${messages.length} 条` : "磁盘保存异常";
+    const errors = [status.last_poll_error, status.store_error].filter(Boolean);
+    const errorText = errors.length ? ` · 最近错误：${errors.join("；")}` : "";
+    $("#sms-status").textContent = `${storageText} · ${pollText} · ${cleanupText}${errorText}`;
     if (lastSMSCount !== null && messages.length > lastSMSCount) {
       notice(`收到 ${messages.length - lastSMSCount} 条新短信`);
     }
@@ -1622,7 +1624,7 @@ $("#refresh-scheduled-tasks").addEventListener("click", async () => {
 $("#clear-module-sms").addEventListener("click", async () => {
   const confirmed = await showModal({
     title: "清空模块旧短信",
-    message: "只会清空模块内部 ME 存储里的旧短信，不会删除 SIM 卡短信。",
+    message: "只会清空模块内部 ME 存储里的旧短信，不会删除 SIM 卡短信或本地已保存的短信历史。",
     confirmLabel: "确认清空",
     danger: true,
   });
