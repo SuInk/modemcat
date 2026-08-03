@@ -18,6 +18,7 @@ DJOneHub 是一款面向**大疆第一代 4G 模块**的第三方 WebUI 管理�
 | 来电提醒 | 已实现 | WebUI 显示来电、未接及中断记录，并可安全拒接当前来电 |
 | Bark / Telegram | 已实现 | 可选推送新短信、来电、未接来电及定时任务结果；默认关闭 |
 | 浏览器提醒 | 已实现 | WebUI 打开时通过浏览器通知显示实时事件 |
+| 登录保护 | 已实现 | 首次启动设置管理员账号，密码以 bcrypt 哈希保存，会话仅保留在内存中 |
 | eSIM Profile | 已实现 | 读取、下载、启用、改名和删除兼容 eUICC 卡片中的 Profile |
 | Profile 号码资料 | 已实现 | 将手动填写的号码保存到模块通讯录，并按 ICCID 关联 Profile |
 | USB 4G 上网 | 已实现 | 切换 USB 网卡模式，让 macOS 使用 SIM 卡流量上网 |
@@ -132,10 +133,25 @@ djonehub start
 http://127.0.0.1:7575
 ```
 
+首次打开会进入“设置管理员账号”页面。账号为 3 到 64 位，可使用字母、数字、点、下划线和连字符；密码至少 12 字节。设置完成后，设备状态、短信、eSIM、网络和提醒 API 都必须登录才能访问。
+
 启动程序的终端需要保持运行。按 `Control+C` 可以停止程序。如果浏览器没有自动打开，可以执行：
 
 ```sh
 djonehub open
+```
+
+需要登录后自动在后台运行时，可以执行：
+
+```sh
+djonehub service install
+```
+
+查看或移除后台服务：
+
+```sh
+djonehub service status
+djonehub service remove
 ```
 
 ## macOS 阻止打开时
@@ -216,6 +232,28 @@ Bark 与 Telegram 默认关闭。通知设置保存在：
 WebUI 强制只监听并接受本机回环地址，不能通过 `-listen 0.0.0.0` 暴露到局域网。修改类 API 还要求同源 JSON 请求。
 
 本功能不配置或启用 Wi-Fi Calling / VoWiFi。蜂窝来电是否到达模块仍取决于 SIM、运营商 IMS/VoLTE、漫游和模块固件支持。
+
+### 账号安全
+
+管理员账号配置保存在：
+
+```text
+~/Library/Application Support/DJOneHub/auth.json
+```
+
+文件权限为 `0600`，只保存账号和 bcrypt 密码哈希，不保存明文密码。登录会话有效期为 24 小时并且只存在当前 DJOneHub 进程内存中；重启服务后需要重新登录。WebUI 顶部的“账号”按钮可以修改账号与密码，修改后所有旧会话都会失效。
+
+### Cloudflare Tunnel 远程访问
+
+如需从外网使用完整 WebUI 和本机 USB 模块，可以通过 Cloudflare Tunnel 转发到本机回环地址。先在本机完成管理员账号设置，再执行发行包中的配置脚本：
+
+```sh
+./cloudflare-setup sms.example.com
+```
+
+脚本会创建命名 Tunnel、写入独立的 `~/.cloudflared/djonehub.yml`、添加 DNS 路由，并安装 `com.djonehub.cloudflared` 与 `com.djonehub.webui` 两个用户级后台服务。它不会修改或重启机器上已有的其他 Tunnel。脚本还会把唯一允许的公网来源设置为 `https://sms.example.com`。DJOneHub 仍只监听 `127.0.0.1:7575`，不会直接开放局域网端口；公网请求必须通过配置的 HTTPS hostname，其他 Host 会被拒绝。
+
+远程页面依赖 Mac、DJOneHub 和 `cloudflared` 持续运行。建议另外在 Cloudflare Zero Trust 中为该 hostname 配置 Access 策略，只允许自己的邮箱；DJOneHub 登录仍保留为第二层保护。首次管理员设置始终只允许从 `http://127.0.0.1:7575` 完成。
 
 ### eSIM 与卡片管理
 

@@ -24,6 +24,8 @@ djonehub start
 
 程序会自动打开 `http://127.0.0.1:7575`。启动程序的终端需要保持打开；按 `Control+C` 即可停止。
 
+首次打开会要求设置管理员账号和至少 12 字节的密码。密码只以 bcrypt 哈希保存在 `~/Library/Application Support/DJOneHub/auth.json`，不会明文保存；文件权限为 `0600`。WebUI 顶部可以修改账号密码或退出，修改凭据会注销所有旧会话。
+
 也可以在另一个终端的任意目录执行：
 
 ```sh
@@ -45,7 +47,20 @@ djonehub status       # 查看状态
 djonehub logs         # 查看实时日志
 djonehub open         # 重新打开管理网页
 djonehub start --demo # 不连接硬件，打开演示界面
+djonehub service install # 登录后自动在后台运行
+djonehub service status  # 查看后台服务状态
+djonehub service remove  # 停止并移除后台服务
 ```
+
+## Cloudflare Tunnel 远程访问
+
+先在本机打开 `http://127.0.0.1:7575` 并设置管理员账号，然后在发行包目录运行：
+
+```sh
+./cloudflare-setup sms.example.com
+```
+
+脚本会把指定 HTTPS hostname 安全转发到本机 WebUI，并安装 DJOneHub 与 Tunnel 的用户级后台服务。DJOneHub 仍只监听回环地址，并只接受脚本配置的公网 Host。Mac 必须保持开机并已登录；建议在 Cloudflare Zero Trust 中再为该 hostname 配置只允许本人邮箱的 Access 策略。
 
 ## macOS 阻止打开时
 

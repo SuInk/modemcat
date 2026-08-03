@@ -69,6 +69,10 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401 || response.status === 428) {
+    window.location.replace("/login");
+    throw new Error(data.error || "请先登录");
+  }
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
@@ -569,6 +573,37 @@ async function loadScheduledTasks() {
     $("#scheduled-task-status").textContent = `读取失败：${error.message}`;
   } finally {
     scheduledTasksInFlight = false;
+  }
+}
+
+async function openAccountSettings() {
+  try {
+    const status = await api("/api/auth/status");
+    const values = await showModal({
+      title: "修改管理员账号",
+      fields: [
+        { name: "username", label: "账号", value: status.username || "", autocomplete: "username", required: true, maxLength: 64 },
+        { name: "current_password", label: "当前密码", type: "password", autocomplete: "current-password", required: true, maxLength: 72 },
+        { name: "new_password", label: "新密码（至少 12 字节）", type: "password", autocomplete: "new-password", required: true, maxLength: 72 },
+      ],
+      confirmLabel: "更新账号",
+    });
+    if (!values) return;
+    await api("/api/auth/credentials", {
+      method: "PUT",
+      body: JSON.stringify(values),
+    });
+    window.location.replace("/login");
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+async function logout() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } finally {
+    window.location.replace("/login");
   }
 }
 
@@ -1608,6 +1643,8 @@ $("#clear-module-sms").addEventListener("click", async () => {
   }
 });
 $("#refresh-esim").addEventListener("click", loadESIM);
+$("#account-settings").addEventListener("click", openAccountSettings);
+$("#logout").addEventListener("click", logout);
 $("#probe-esim-phonebook").addEventListener("click", probeESIMPhonebook);
 $("#refresh-network").addEventListener("click", loadNetwork);
 $("#workmode-sms").addEventListener("click", () =>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · DJOneHub WebUI</title>
+  <script>
+    try {
+      const theme = localStorage.getItem("djonehub-theme") || localStorage.getItem("vohive-theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    } catch (_) {}
+  </script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-page">
+  <main class="auth-shell">
+    <header class="auth-brand">
+      <div class="brand-line"><span class="brand-mark" aria-hidden="true"></span><span class="eyebrow">DJI 4G MODULE</span></div>
+      <h1>DJOneHub <span>WebUI</span></h1>
+    </header>
+    <section class="auth-panel">
+      <h2 id="auth-title">正在检查账号</h2>
+      <p id="auth-subtitle">本机管理后台</p>
+      <form id="auth-form" class="auth-form" hidden>
+        <label>
+          <span>账号</span>
+          <input id="auth-username" name="username" maxlength="64" required>
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="auth-password" name="password" type="password" maxlength="72" required>
+        </label>
+        <label id="auth-confirm-row" hidden>
+          <span>确认密码</span>
+          <input id="auth-confirm" name="confirm_password" type="password" maxlength="72">
+        </label>
+        <button id="auth-submit" type="submit">登录</button>
+      </form>
+      <p id="auth-error" class="auth-error" role="alert" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="/login.js"></script>
+</body>
+</html>

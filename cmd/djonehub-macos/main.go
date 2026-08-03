@@ -115,6 +115,7 @@ type app struct {
 	notifications  *notificationService
 	eventHub       *eventHub
 	scheduledTasks *scheduledTaskService
+	auth           *authService
 
 	profileNotesMu     sync.Mutex
 	profileNotes       map[string]profileNote
@@ -125,6 +126,7 @@ type app struct {
 
 	trafficMu        sync.Mutex
 	trafficBaselines map[string]networkByteCounters
+	publicOrigin     string
 
 	hardwarePortsMu        sync.Mutex
 	hardwarePorts          []macHardwarePort
@@ -215,18 +217,24 @@ func main() {
 	var port string
 	var listen string
 	var demo bool
+	var publicOrigin string
 	flag.StringVar(&port, "port", "", "AT serial port; auto-detected when omitted")
 	flag.StringVar(&listen, "listen", "127.0.0.1:7575", "HTTP listen address")
 	flag.BoolVar(&demo, "demo", false, "run the web UI with simulated modem data")
+	flag.StringVar(&publicOrigin, "public-origin", os.Getenv("DJONEHUB_PUBLIC_ORIGIN"), "allowed HTTPS origin for Cloudflare Tunnel")
 	flag.Parse()
 	if err := validateListenAddress(listen); err != nil {
 		log.Fatalf("invalid -listen address: %v", err)
+	}
+	publicOrigin, err := validatePublicOrigin(publicOrigin)
+	if err != nil {
+		log.Fatalf("invalid -public-origin: %v", err)
 	}
 
 	if demo {
 		instance := newDemoApp()
 		log.Printf("DJOneHub demo mode")
-		serve(instance, listen)
+		serve(instance, listen, publicOrigin)
 		return
 	}
 
@@ -260,7 +268,7 @@ func main() {
 				instance.initUSBATESIMManager()
 			}
 			log.Printf("modem discovery skipped: %v", err)
-			serve(instance, listen)
+			serve(instance, listen, publicOrigin)
 			return
 		}
 	}
@@ -319,7 +327,7 @@ func main() {
 		instance.markSMSNotificationsReady()
 	}()
 
-	serve(instance, listen)
+	serve(instance, listen, publicOrigin)
 }
 
 func (a *app) initUSBATESIMManager() {
@@ -362,7 +370,9 @@ func (a *app) installESIMManager(manager *esim.Manager, switchAllowed bool) bool
 	return true
 }
 
-func serve(instance *app, listen string) {
+func serve(instance *app, listen, publicOrigin string) {
+	instance.publicOrigin = publicOrigin
+	instance.initAuth()
 	instance.initNotifications()
 	instance.initScheduledTasks()
 	instance.usbATMu.RLock()
@@ -823,6 +833,11 @@ func (a *app) transportSnapshot() (string, string) {
 func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", a.health)
+	mux.HandleFunc("GET /api/auth/status", a.authStatus)
+	mux.HandleFunc("POST /api/auth/setup", a.setupAuth)
+	mux.HandleFunc("POST /api/auth/login", a.loginAuth)
+	mux.HandleFunc("POST /api/auth/logout", a.logoutAuth)
+	mux.HandleFunc("PUT /api/auth/credentials", a.updateAuthCredentials)
 	mux.HandleFunc("GET /api/status", a.status)
 	mux.HandleFunc("GET /api/sms", a.listSMS)
 	mux.HandleFunc("GET /api/sms/status", a.smsStatus)
@@ -858,24 +873,29 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/esim/profile", a.renameESIMProfile)
 	mux.HandleFunc("DELETE /api/esim/profile", a.deleteESIMProfile)
 	mux.HandleFunc("POST /api/esim/download", a.downloadESIMProfile)
+	mux.HandleFunc("GET /login", serveLoginPage)
 	content, _ := fs.Sub(webAssets, "web")
 	mux.Handle("/", http.FileServer(http.FS(content)))
-	return securityHeaders(mux)
+	handler := http.Handler(mux)
+	if a.auth != nil {
+		handler = a.auth.middleware(handler)
+	}
+	return securityHeaders(handler, a.publicOrigin)
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(next http.Handler, publicOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		if !loopbackRequestHost(r.Host) {
+		if !allowedRequestHost(r.Host, publicOrigin) {
 			writeError(w, http.StatusForbidden, "only loopback hosts are allowed")
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			(!sameOriginMutation(r) || !jsonMutation(r)) {
+			(!sameOriginMutation(r, publicOrigin) || !jsonMutation(r)) {
 			writeError(w, http.StatusForbidden, "cross-site requests are not allowed")
 			return
 		}
@@ -883,8 +903,8 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func sameOriginMutation(r *http.Request) bool {
-	if !loopbackRequestHost(r.Host) {
+func sameOriginMutation(r *http.Request, publicOrigin string) bool {
+	if !allowedRequestHost(r.Host, publicOrigin) {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
@@ -898,7 +918,48 @@ func sameOriginMutation(r *http.Request) bool {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return false
 	}
-	return strings.EqualFold(parsed.Host, r.Host) && loopbackRequestHost(parsed.Host)
+	if !strings.EqualFold(parsed.Host, r.Host) || !allowedRequestHost(parsed.Host, publicOrigin) {
+		return false
+	}
+	if !loopbackRequestHost(r.Host) {
+		return strings.EqualFold(parsed.Scheme+"://"+parsed.Host, publicOrigin)
+	}
+	return true
+}
+
+func validatePublicOrigin(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return "", errors.New("must be an HTTPS origin such as https://djonehub.example.com")
+	}
+	if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("must not contain credentials, a path, query, or fragment")
+	}
+	if net.ParseIP(parsed.Hostname()) != nil || strings.EqualFold(parsed.Hostname(), "localhost") {
+		return "", errors.New("must use a public DNS hostname")
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, portErr := strconv.Atoi(port)
+		if portErr != nil || portNumber < 1 || portNumber > 65535 {
+			return "", errors.New("contains an invalid port")
+		}
+	}
+	return "https://" + strings.ToLower(parsed.Host), nil
+}
+
+func allowedRequestHost(host, publicOrigin string) bool {
+	if loopbackRequestHost(host) {
+		return true
+	}
+	if publicOrigin == "" {
+		return false
+	}
+	parsed, err := url.Parse(publicOrigin)
+	return err == nil && strings.EqualFold(strings.TrimSpace(host), parsed.Host)
 }
 
 func jsonMutation(r *http.Request) bool {

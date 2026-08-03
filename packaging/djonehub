@@ -17,6 +17,9 @@ DATA_DIR="${HOME}/Library/Application Support/DJOneHub"
 LOG_DIR="${HOME}/Library/Logs/DJOneHub"
 PID_FILE="${DATA_DIR}/djonehub.pid"
 LOG_FILE="${LOG_DIR}/djonehub.log"
+PUBLIC_ORIGIN_FILE="${DATA_DIR}/public-origin"
+LAUNCH_AGENT_LABEL="com.djonehub.webui"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +32,11 @@ DJOneHub for macOS
   djonehub status         查看运行状态
   djonehub logs           查看实时日志（Ctrl+C 退出日志）
   djonehub open           打开管理网页
+  djonehub cloudflare URL 设置允许的 Cloudflare HTTPS 域名
+  djonehub cloudflare off 关闭 Cloudflare 公网来源
+  djonehub service install 安装并启动登录后自动运行的后台服务
+  djonehub service remove  停止并移除后台服务
+  djonehub service status  查看后台服务状态
 EOF
 }
 
@@ -53,6 +61,10 @@ clean_stale_pid() {
   if [ -f "${PID_FILE}" ] && ! is_running; then
     rm -f "${PID_FILE}"
   fi
+}
+
+launch_agent_loaded() {
+  launchctl print "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1
 }
 
 open_page() {
@@ -80,6 +92,12 @@ start_service() {
     mv -f "${LOG_FILE}" "${LOG_FILE}.1"
   fi
   clean_stale_pid
+  if launch_agent_loaded; then
+    printf 'DJOneHub 后台服务已启用，正在打开管理网页。\n'
+    launchctl kickstart "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+    open_page
+    exit 0
+  fi
   if is_running; then
     printf 'DJOneHub 已在运行，正在打开管理网页。\n'
     open_page
@@ -91,8 +109,16 @@ start_service() {
     exit 1
   fi
 
-  if [ "${mode}" = "--demo" ]; then
+  public_origin=""
+  if [ -f "${PUBLIC_ORIGIN_FILE}" ]; then
+    public_origin=$(head -n 1 "${PUBLIC_ORIGIN_FILE}")
+  fi
+  if [ "${mode}" = "--demo" ] && [ -n "${public_origin}" ]; then
+    "${BINARY}" -listen 127.0.0.1:7575 -demo -public-origin "${public_origin}" >>"${LOG_FILE}" 2>&1 &
+  elif [ "${mode}" = "--demo" ]; then
     "${BINARY}" -listen 127.0.0.1:7575 -demo >>"${LOG_FILE}" 2>&1 &
+  elif [ -n "${public_origin}" ]; then
+    "${BINARY}" -listen 127.0.0.1:7575 -public-origin "${public_origin}" >>"${LOG_FILE}" 2>&1 &
   else
     "${BINARY}" -listen 127.0.0.1:7575 >>"${LOG_FILE}" 2>&1 &
   fi
@@ -144,7 +170,134 @@ start_service() {
   exit "${status}"
 }
 
+run_launch_agent() {
+  public_origin=""
+  if [ -f "${PUBLIC_ORIGIN_FILE}" ]; then
+    public_origin=$(head -n 1 "${PUBLIC_ORIGIN_FILE}")
+  fi
+  if [ -n "${public_origin}" ]; then
+    exec "${BINARY}" -listen 127.0.0.1:7575 -public-origin "${public_origin}"
+  fi
+  exec "${BINARY}" -listen 127.0.0.1:7575
+}
+
+install_launch_agent() {
+  if [ ! -x "${BINARY}" ]; then
+    printf '安装后台服务失败：缺少可执行文件 %s\n' "${BINARY}" >&2
+    exit 1
+  fi
+  mkdir -p "${DATA_DIR}" "${LOG_DIR}" "${HOME}/Library/LaunchAgents"
+  chmod 700 "${DATA_DIR}"
+  clean_stale_pid
+  if is_running; then
+    foreground_pid=$(read_pid)
+    kill -TERM "${foreground_pid}" 2>/dev/null || true
+    attempts=0
+    while kill -0 "${foreground_pid}" 2>/dev/null && [ "${attempts}" -lt 50 ]; do
+      attempts=$((attempts + 1))
+      sleep 0.1
+    done
+    if kill -0 "${foreground_pid}" 2>/dev/null; then
+      printf '安装后台服务失败：前台 DJOneHub 尚未退出。\n' >&2
+      exit 1
+    fi
+    rm -f "${PID_FILE}"
+  fi
+
+  temporary_agent="${LAUNCH_AGENT}.tmp.$$"
+  plutil -create xml1 "${temporary_agent}" || exit 1
+  plutil -insert Label -string "${LAUNCH_AGENT_LABEL}" "${temporary_agent}" || exit 1
+  plutil -insert ProgramArguments -xml '<array/>' "${temporary_agent}" || exit 1
+  plutil -insert ProgramArguments.0 -string "${SOURCE}" "${temporary_agent}" || exit 1
+  plutil -insert ProgramArguments.1 -string service-run "${temporary_agent}" || exit 1
+  plutil -insert RunAtLoad -bool true "${temporary_agent}" || exit 1
+  plutil -insert KeepAlive -bool true "${temporary_agent}" || exit 1
+  plutil -insert ProcessType -string Background "${temporary_agent}" || exit 1
+  plutil -insert StandardOutPath -string "${LOG_FILE}" "${temporary_agent}" || exit 1
+  plutil -insert StandardErrorPath -string "${LOG_FILE}" "${temporary_agent}" || exit 1
+  mv -f "${temporary_agent}" "${LAUNCH_AGENT}" || exit 1
+  chmod 600 "${LAUNCH_AGENT}"
+
+  launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "${LAUNCH_AGENT}" || exit 1
+  launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" || exit 1
+
+  attempts=0
+  while [ "${attempts}" -lt 50 ]; do
+    if /usr/bin/curl -fsS --max-time 1 "${URL}/api/health" >/dev/null 2>&1; then
+      printf 'DJOneHub 后台服务已安装并启动：%s\n' "${URL}"
+      return
+    fi
+    attempts=$((attempts + 1))
+    sleep 0.2
+  done
+  printf '后台服务已安装，但 WebUI 尚未就绪，请查看日志：%s\n' "${LOG_FILE}" >&2
+  exit 1
+}
+
+remove_launch_agent() {
+  launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+  rm -f "${LAUNCH_AGENT}"
+  printf 'DJOneHub 后台服务已停止并移除。\n'
+}
+
+show_launch_agent_status() {
+  if ! launch_agent_loaded; then
+    printf 'DJOneHub 后台服务尚未安装或没有运行。\n'
+    return
+  fi
+  service_pid=$(launchctl print "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" 2>/dev/null | awk '/pid =/ { print $3; exit }')
+  if [ -n "${service_pid}" ]; then
+    printf 'DJOneHub 后台服务正在运行（PID %s）\n' "${service_pid}"
+    printf '管理网页：%s\n' "${URL}"
+  else
+    printf 'DJOneHub 后台服务已加载，正在等待启动。\n'
+  fi
+}
+
+configure_cloudflare() {
+  origin=${1:-}
+  if [ -z "${origin}" ]; then
+    printf '请提供完整 HTTPS 域名，例如：https://djonehub.example.com\n' >&2
+    exit 2
+  fi
+  mkdir -p "${DATA_DIR}"
+  chmod 700 "${DATA_DIR}"
+  if [ "${origin}" = "off" ]; then
+    rm -f "${PUBLIC_ORIGIN_FILE}"
+    if launch_agent_loaded; then
+      launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+      printf 'Cloudflare 公网来源已关闭，后台服务已重启。\n'
+    else
+      printf 'Cloudflare 公网来源已关闭；重启 DJOneHub 后生效。\n'
+    fi
+    return
+  fi
+  case "${origin}" in
+    https://*) ;;
+    *) printf 'Cloudflare 域名必须使用 https:// 开头。\n' >&2; exit 2 ;;
+  esac
+  case "${origin}" in
+    *[[:space:]]*) printf 'Cloudflare 域名不能包含空白字符。\n' >&2; exit 2 ;;
+  esac
+  umask 077
+  temporary="${PUBLIC_ORIGIN_FILE}.tmp.$$"
+  printf '%s\n' "${origin}" >"${temporary}"
+  mv -f "${temporary}" "${PUBLIC_ORIGIN_FILE}"
+  if launch_agent_loaded; then
+    launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+    printf 'Cloudflare 公网来源已设置为 %s，后台服务已重启。\n' "${origin}"
+  else
+    printf 'Cloudflare 公网来源已设置为 %s；重启 DJOneHub 后生效。\n' "${origin}"
+  fi
+}
+
 stop_service() {
+  if launch_agent_loaded; then
+    launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+    printf 'DJOneHub 后台服务已停止；执行 djonehub service install 可重新启用。\n'
+    exit 0
+  fi
   clean_stale_pid
   if ! is_running; then
     printf 'DJOneHub 当前没有运行。\n'
@@ -166,6 +319,10 @@ stop_service() {
 }
 
 show_status() {
+  if launch_agent_loaded; then
+    show_launch_agent_status
+    return
+  fi
   clean_stale_pid
   if is_running; then
     printf 'DJOneHub 正在运行（PID %s）\n' "$(read_pid)"
@@ -189,6 +346,16 @@ case "${1:-}" in
     touch "${LOG_FILE}"
     tail -n 100 -f "${LOG_FILE}"
     ;;
+  cloudflare) configure_cloudflare "${2:-}" ;;
+  service)
+    case "${2:-}" in
+      install) install_launch_agent ;;
+      remove) remove_launch_agent ;;
+      status) show_launch_agent_status ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  service-run) run_launch_agent ;;
   open) open_page ;;
   help|-h|--help|"") usage ;;
   *) usage; exit 2 ;;

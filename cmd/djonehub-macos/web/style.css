@@ -87,6 +87,18 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .compact { min-height: 34px; padding: 0 11px; font-size: 13px; }
 .icon-button { display: grid; width: 38px; place-items: center; padding: 0; font-size: 19px; line-height: 1; }
 
+.auth-page { min-height: 100vh; }
+.auth-shell { width: min(420px, calc(100% - 32px)); margin: 0 auto; padding: max(40px, 10vh) 0 48px; }
+.auth-brand { margin-bottom: 22px; }
+.auth-brand h1 { font-size: 26px; }
+.auth-panel { padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 18px 44px rgba(34, 47, 65, .1); }
+.auth-panel h2 { font-size: 19px; }
+.auth-panel > p { margin-top: 7px; font-size: 13px; }
+.auth-form { display: grid; gap: 14px; margin-top: 20px; }
+.auth-form label span { display: block; margin-bottom: 6px; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+.auth-form button { margin-top: 3px; }
+.auth-error { min-height: 20px; margin-top: 13px; color: #c13d4c; font-size: 13px; }
+
 .app-main { padding: 26px 0 56px; }
 .overview { overflow: hidden; border: 1px solid #d9dee6; border-radius: 8px; background: #fff; }
 .overview-heading { display: flex; align-items: center; justify-content: space-between; padding: 11px 16px; border-bottom: 1px solid #e6eaf0; color: #3e4c60; font-size: 13px; font-weight: 700; }
@@ -372,4 +384,4 @@ input, textarea { border-color: var(--border); background: var(--surface); color
   .settings-actions { align-items: stretch; flex-direction: column-reverse; }
   .scheduled-task-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 420px) { .header-actions { display: grid; grid-template-columns: 1fr 1fr auto; } .header-actions > .theme-switch { grid-column: 1 / -1; } .header-actions button { min-width: 0; padding: 0 8px; } }
+@media (max-width: 420px) { .header-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } .header-actions > .theme-switch { grid-column: 1 / -1; } .header-actions button { min-width: 0; padding: 0 8px; } .header-actions .icon-button { width: auto; } }

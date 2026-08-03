@@ -23,6 +23,8 @@ const (
 	djiUSBProductID       = 0x4006
 	usbATCallURCQueueSize = 32
 	usbATURCLineLimit     = 4096
+	usbATDrainMaxReads    = 32
+	usbATDrainMaxDuration = 400 * time.Millisecond
 )
 
 type usbATCallURC struct {
@@ -416,12 +418,17 @@ func parseUSBATCallURC(line string) (kind, number string, ok bool) {
 }
 
 func (u *usbAT) drainLocked() {
-	for {
-		data, err := u.bulkReadLocked(u.endpointIn, 80*time.Millisecond)
+	deadline := time.Now().Add(usbATDrainMaxDuration)
+	for reads := 0; reads < usbATDrainMaxReads && time.Now().Before(deadline); reads++ {
+		remaining := time.Until(deadline)
+		if remaining > 80*time.Millisecond {
+			remaining = 80 * time.Millisecond
+		}
+		data, err := u.bulkReadLocked(u.endpointIn, remaining)
 		if len(data) > 0 {
 			u.consumeCallURCsLocked(data)
 		}
-		if err != nil {
+		if err != nil || len(data) == 0 {
 			return
 		}
 	}

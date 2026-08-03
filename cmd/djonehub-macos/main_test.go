@@ -167,6 +167,7 @@ func TestSameOriginMutation(t *testing.T) {
 		host      string
 		origin    string
 		fetchSite string
+		public    string
 		want      bool
 	}{
 		{name: "CLI without browser headers", host: "127.0.0.1:7575", want: true},
@@ -174,6 +175,8 @@ func TestSameOriginMutation(t *testing.T) {
 		{name: "cross origin", host: "127.0.0.1:7575", origin: "https://example.com", want: false},
 		{name: "cross site form", host: "127.0.0.1:7575", fetchSite: "cross-site", want: false},
 		{name: "DNS rebinding host", host: "evil.test:7575", origin: "http://evil.test:7575", fetchSite: "same-origin", want: false},
+		{name: "Cloudflare HTTPS origin", host: "djonehub.example.com", origin: "https://djonehub.example.com", fetchSite: "same-origin", public: "https://djonehub.example.com", want: true},
+		{name: "Cloudflare HTTP downgrade", host: "djonehub.example.com", origin: "http://djonehub.example.com", fetchSite: "same-origin", public: "https://djonehub.example.com", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,10 +188,23 @@ func TestSameOriginMutation(t *testing.T) {
 			if tt.fetchSite != "" {
 				request.Header.Set("Sec-Fetch-Site", tt.fetchSite)
 			}
-			if got := sameOriginMutation(request); got != tt.want {
+			if got := sameOriginMutation(request, tt.public); got != tt.want {
 				t.Fatalf("sameOriginMutation() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidatePublicOrigin(t *testing.T) {
+	for _, value := range []string{"", "https://djonehub.example.com", "https://djonehub.example.com:8443"} {
+		if _, err := validatePublicOrigin(value); err != nil {
+			t.Errorf("validatePublicOrigin(%q) = %v", value, err)
+		}
+	}
+	for _, value := range []string{"http://djonehub.example.com", "https://127.0.0.1", "https://localhost", "https://user@example.com", "https://example.com/path", "https://example.com?q=1"} {
+		if _, err := validatePublicOrigin(value); err == nil {
+			t.Errorf("validatePublicOrigin(%q) unexpectedly succeeded", value)
+		}
 	}
 }
 
@@ -226,19 +242,22 @@ func TestValidateListenAddress(t *testing.T) {
 func TestSecurityHeadersRejectUnsafeRequests(t *testing.T) {
 	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	}), "")
 	tests := []struct {
 		name        string
 		method      string
 		host        string
 		origin      string
 		contentType string
+		public      string
 		want        int
 	}{
 		{name: "loopback GET", method: http.MethodGet, host: "127.0.0.1:7575", want: http.StatusNoContent},
 		{name: "rebinding GET", method: http.MethodGet, host: "evil.test:7575", want: http.StatusForbidden},
 		{name: "same-origin JSON", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "application/json", want: http.StatusNoContent},
 		{name: "simple form", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "text/plain", want: http.StatusForbidden},
+		{name: "allowed Cloudflare host", method: http.MethodGet, host: "djonehub.example.com", public: "https://djonehub.example.com", want: http.StatusNoContent},
+		{name: "unconfigured public host", method: http.MethodGet, host: "djonehub.example.com", want: http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -251,7 +270,13 @@ func TestSecurityHeadersRejectUnsafeRequests(t *testing.T) {
 				request.Header.Set("Content-Type", tt.contentType)
 			}
 			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, request)
+			candidate := handler
+			if tt.public != "" {
+				candidate = securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				}), tt.public)
+			}
+			candidate.ServeHTTP(recorder, request)
 			if recorder.Code != tt.want {
 				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, tt.want, recorder.Body.String())
 			}
