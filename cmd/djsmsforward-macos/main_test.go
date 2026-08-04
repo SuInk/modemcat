@@ -175,8 +175,8 @@ func TestSameOriginMutation(t *testing.T) {
 		{name: "cross origin", host: "127.0.0.1:7575", origin: "https://example.com", want: false},
 		{name: "cross site form", host: "127.0.0.1:7575", fetchSite: "cross-site", want: false},
 		{name: "DNS rebinding host", host: "evil.test:7575", origin: "http://evil.test:7575", fetchSite: "same-origin", want: false},
-		{name: "Cloudflare HTTPS origin", host: "djonehub.example.com", origin: "https://djonehub.example.com", fetchSite: "same-origin", public: "https://djonehub.example.com", want: true},
-		{name: "Cloudflare HTTP downgrade", host: "djonehub.example.com", origin: "http://djonehub.example.com", fetchSite: "same-origin", public: "https://djonehub.example.com", want: false},
+		{name: "Cloudflare HTTPS origin", host: "djsmsforward.example.com", origin: "https://djsmsforward.example.com", fetchSite: "same-origin", public: "https://djsmsforward.example.com", want: true},
+		{name: "Cloudflare HTTP downgrade", host: "djsmsforward.example.com", origin: "http://djsmsforward.example.com", fetchSite: "same-origin", public: "https://djsmsforward.example.com", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,12 +196,12 @@ func TestSameOriginMutation(t *testing.T) {
 }
 
 func TestValidatePublicOrigin(t *testing.T) {
-	for _, value := range []string{"", "https://djonehub.example.com", "https://djonehub.example.com:8443"} {
+	for _, value := range []string{"", "https://djsmsforward.example.com", "https://djsmsforward.example.com:8443"} {
 		if _, err := validatePublicOrigin(value); err != nil {
 			t.Errorf("validatePublicOrigin(%q) = %v", value, err)
 		}
 	}
-	for _, value := range []string{"http://djonehub.example.com", "https://127.0.0.1", "https://localhost", "https://user@example.com", "https://example.com/path", "https://example.com?q=1"} {
+	for _, value := range []string{"http://djsmsforward.example.com", "https://127.0.0.1", "https://localhost", "https://user@example.com", "https://example.com/path", "https://example.com?q=1"} {
 		if _, err := validatePublicOrigin(value); err == nil {
 			t.Errorf("validatePublicOrigin(%q) unexpectedly succeeded", value)
 		}
@@ -256,8 +256,8 @@ func TestSecurityHeadersRejectUnsafeRequests(t *testing.T) {
 		{name: "rebinding GET", method: http.MethodGet, host: "evil.test:7575", want: http.StatusForbidden},
 		{name: "same-origin JSON", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "application/json", want: http.StatusNoContent},
 		{name: "simple form", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "text/plain", want: http.StatusForbidden},
-		{name: "allowed Cloudflare host", method: http.MethodGet, host: "djonehub.example.com", public: "https://djonehub.example.com", want: http.StatusNoContent},
-		{name: "unconfigured public host", method: http.MethodGet, host: "djonehub.example.com", want: http.StatusForbidden},
+		{name: "allowed Cloudflare host", method: http.MethodGet, host: "djsmsforward.example.com", public: "https://djsmsforward.example.com", want: http.StatusNoContent},
+		{name: "unconfigured public host", method: http.MethodGet, host: "djsmsforward.example.com", want: http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -187,7 +187,7 @@ func notificationConfigFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJOneHub", "notifications.json"), nil
+	return filepath.Join(dir, "DJSMSForward", "notifications.json"), nil
 }
 
 func newNotificationService(path string, client *http.Client, hub *eventHub) (*notificationService, error) {
@@ -456,7 +456,7 @@ func (s *notificationService) sendBark(ctx context.Context, cfg notificationConf
 		"device_key": cfg.Bark.DeviceKey,
 		"title":      title,
 		"body":       body,
-		"group":      "DJOneHub",
+		"group":      "DJSMSForward",
 		"id":         shortHash(event.ID),
 	}
 	if event.Kind == "incoming_call" {
@@ -545,17 +545,17 @@ func renderExternalEvent(cfg notificationConfig, event notificationEvent) (strin
 		if cfg.IncludeSMSBody && strings.TrimSpace(event.Message) != "" {
 			body += "\n" + event.Message
 		}
-		return "DJOneHub 新短信", body
+		return "DJSMSForward 新短信", body
 	case "incoming_call":
 		if cfg.IncludeCallerNumber {
-			return "DJOneHub 来电", "号码：" + valueOrUnknown(event.Number)
+			return "DJSMSForward 来电", "号码：" + valueOrUnknown(event.Number)
 		}
-		return "DJOneHub 来电", "检测到新的来电"
+		return "DJSMSForward 来电", "检测到新的来电"
 	case "missed_call":
 		if cfg.IncludeCallerNumber {
-			return "DJOneHub 未接来电", "号码：" + valueOrUnknown(event.Number)
+			return "DJSMSForward 未接来电", "号码：" + valueOrUnknown(event.Number)
 		}
-		return "DJOneHub 未接来电", "有一个未接来电"
+		return "DJSMSForward 未接来电", "有一个未接来电"
 	default:
 		return event.Title, event.Body
 	}
@@ -578,7 +578,7 @@ func newJSONRequest(ctx context.Context, endpoint string, payload any) (*http.Re
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "DJOneHub/notifications")
+	request.Header.Set("User-Agent", "DJSMSForward/notifications")
 	return request, nil
 }
 
@@ -808,7 +808,7 @@ func (a *app) testNotifications(w http.ResponseWriter, r *http.Request) {
 	testEvent := notificationEvent{
 		ID:        "test-" + shortHash(time.Now().Format(time.RFC3339Nano)),
 		Kind:      "test",
-		Title:     "DJOneHub 测试提醒",
+		Title:     "DJSMSForward 测试提醒",
 		Body:      "Bark / Telegram 通知通道工作正常",
 		CreatedAt: time.Now(),
 	}

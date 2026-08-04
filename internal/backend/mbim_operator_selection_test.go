@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/iniwex5/vohive/pkg/mbim"
+	"github.com/SuInk/djsmsforward/pkg/mbim"
 )
 
 func TestMBIMBackendImplementsOperatorSelectionProvider(t *testing.T) {

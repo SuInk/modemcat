@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/djsmsforward/internal/apduarbiter"
+	"github.com/SuInk/djsmsforward/pkg/logger"
 	qmiq "github.com/iniwex5/quectel-qmi-go/pkg/qmi"
-	"github.com/iniwex5/vohive/internal/apduarbiter"
-	"github.com/iniwex5/vohive/pkg/logger"
 )
 
 // QMIUIMTransport 提供独立于 qmicore.Manager 的 QMI UIM APDU 传输实现。

@@ -27,12 +27,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SuInk/djsmsforward/internal/backend"
+	"github.com/SuInk/djsmsforward/internal/config"
+	"github.com/SuInk/djsmsforward/internal/esim"
+	"github.com/SuInk/djsmsforward/internal/modem"
+	"github.com/SuInk/djsmsforward/pkg/smscodec"
 	"github.com/damonto/euicc-go/driver"
-	"github.com/iniwex5/vohive/internal/backend"
-	"github.com/iniwex5/vohive/internal/config"
-	"github.com/iniwex5/vohive/internal/esim"
-	"github.com/iniwex5/vohive/internal/modem"
-	"github.com/iniwex5/vohive/pkg/smscodec"
 )
 
 //go:embed web/*
@@ -221,10 +221,11 @@ func main() {
 	var listen string
 	var demo bool
 	var publicOrigin string
+	publicOriginDefault := os.Getenv("DJSMSFORWARD_PUBLIC_ORIGIN")
 	flag.StringVar(&port, "port", "", "AT serial port; auto-detected when omitted")
 	flag.StringVar(&listen, "listen", "127.0.0.1:7575", "HTTP listen address")
 	flag.BoolVar(&demo, "demo", false, "run the web UI with simulated modem data")
-	flag.StringVar(&publicOrigin, "public-origin", os.Getenv("DJONEHUB_PUBLIC_ORIGIN"), "allowed HTTPS origin for Cloudflare Tunnel")
+	flag.StringVar(&publicOrigin, "public-origin", publicOriginDefault, "allowed HTTPS origin for Cloudflare Tunnel")
 	flag.Parse()
 	if err := validateListenAddress(listen); err != nil {
 		log.Fatalf("invalid -listen address: %v", err)
@@ -236,7 +237,7 @@ func main() {
 
 	if demo {
 		instance := newDemoApp()
-		log.Printf("DJOneHub demo mode")
+		log.Printf("DJSMSForward demo mode")
 		serve(instance, listen, publicOrigin)
 		return
 	}
@@ -401,7 +402,7 @@ func serve(instance *app, listen, publicOrigin string) {
 
 	if !instance.demo {
 		port, _ := instance.transportSnapshot()
-		log.Printf("DJOneHub is using %s", port)
+		log.Printf("DJSMSForward is using %s", port)
 	}
 	log.Printf("Open http://%s", listen)
 	serveErr := make(chan error, 1)
@@ -415,7 +416,7 @@ func serve(instance *app, listen, publicOrigin string) {
 			log.Printf("HTTP server stopped unexpectedly: %v", err)
 		}
 	case <-ctx.Done():
-		log.Printf("DJOneHub is stopping")
+		log.Printf("DJSMSForward is stopping")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -435,7 +436,7 @@ func newDemoApp() *app {
 		sms: []receivedSMS{
 			{
 				Sender:    "10086",
-				Content:   "【DJOneHub 演示】本月套餐剩余流量 18.6GB。",
+				Content:   "【DJSMSForward 演示】本月套餐剩余流量 18.6GB。",
 				Timestamp: now.Add(-18 * time.Minute),
 			},
 			{
@@ -958,7 +959,7 @@ func validatePublicOrigin(value string) (string, error) {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return "", errors.New("must be an HTTPS origin such as https://djonehub.example.com")
+		return "", errors.New("must be an HTTPS origin such as https://sms.example.com")
 	}
 	if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("must not contain credentials, a path, query, or fragment")
@@ -2145,7 +2146,7 @@ func (a *app) loadProfileNotesLocked() error {
 		if err != nil {
 			return fmt.Errorf("locate profile notes directory: %w", err)
 		}
-		path = filepath.Join(configDir, "DJOneHub", "profile-notes.json")
+		path = filepath.Join(configDir, "DJSMSForward", "profile-notes.json")
 		a.profileNotesPath = path
 	}
 	notes := make(map[string]profileNote)

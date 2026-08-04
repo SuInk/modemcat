@@ -1,4 +1,4 @@
-# DJOneHub for macOS
+# DJSMSForward for macOS
 
 This branch adds a native macOS service for the DJI Cellular Dongle / Quectel
 EG25-G. It does not require UTM for AT-mode management.
@@ -14,25 +14,25 @@ EG25-G. It does not require UTM for AT-mode management.
 - Packaged Apple Silicon release (Intel packaging is planned separately)
 
 The cellular data interface remains managed by macOS. This allows macOS to use
-the dongle as its network connection while DJOneHub uses a separate USB serial
+the dongle as its network connection while DJSMSForward uses a separate USB serial
 interface for management.
 
 ## Downloaded release
 
 The Apple Silicon ZIP contains the executable, its libusb runtime, licenses and
-the `djonehub` terminal launcher. It does not require Go, Homebrew or a separately
+the `djsmsforward` terminal launcher. It does not require Go, Homebrew or a separately
 installed libusb on the user's Mac.
 
 From the extracted release directory:
 
 ```sh
-./djonehub start
+./djsmsforward start
 ```
 
 The terminal remains attached to the service and the management page opens
-automatically. Press `Control+C` to stop it, or run `./djonehub stop` from another
+automatically. Press `Control+C` to stop it, or run `./djsmsforward stop` from another
 terminal in the same directory. Logs are stored in
-`~/Library/Logs/DJOneHub/djonehub.log`.
+`~/Library/Logs/DJSMSForward/djsmsforward.log`.
 
 ## Build from source
 
@@ -47,9 +47,9 @@ Requirements:
 
 Release outputs:
 
-- `dist/release/DJOneHub-macOS-arm64-v0.1.0-preview/`
-- `dist/release/DJOneHub-macOS-arm64-v0.1.0-preview.zip`
-- `dist/release/DJOneHub-macOS-arm64-v0.1.0-preview.zip.sha256`
+- `dist/release/DJSMSForward-macOS-arm64-v0.1.0-preview/`
+- `dist/release/DJSMSForward-macOS-arm64-v0.1.0-preview.zip`
+- `dist/release/DJSMSForward-macOS-arm64-v0.1.0-preview.zip.sha256`
 
 The packaging script downloads the official libusb source archive, verifies its
 SHA-256, builds it for macOS 13 or newer and bundles the resulting runtime.
@@ -59,13 +59,13 @@ SHA-256, builds it for macOS 13 or newer and bundles the resulting runtime.
 Connect the modem and run:
 
 ```sh
-./dist/djonehub-macos
+./dist/djsmsforward-macos
 ```
 
 If automatic discovery picks no AT port, inspect `/dev/cu.*` and pass it:
 
 ```sh
-./dist/djonehub-macos -port /dev/cu.usbmodemXXXX
+./dist/djsmsforward-macos -port /dev/cu.usbmodemXXXX
 ```
 
 The server only listens on localhost by default. Open:
@@ -79,7 +79,7 @@ http://127.0.0.1:7575
 To explore the management page before buying the module, run:
 
 ```sh
-./dist/djonehub-macos -demo
+./dist/djsmsforward-macos -demo
 ```
 
 Then open `http://127.0.0.1:7575`. Demo mode provides simulated modem status,
@@ -92,7 +92,7 @@ SIM, send messages or switch a physical eSIM profile.
 ./scripts/install-macos.sh
 ```
 
-Logs are written to `~/Library/Logs/DJOneHub`.
+Logs are written to `~/Library/Logs/DJSMSForward`.
 
 ## Platform limitations
 

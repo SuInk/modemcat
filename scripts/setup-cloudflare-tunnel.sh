@@ -2,18 +2,18 @@
 set -eu
 
 PUBLIC_HOST=${1:-}
-TUNNEL_NAME=${2:-djonehub}
+TUNNEL_NAME=${2:-djsmsforward}
 CLOUDFLARED=$(command -v cloudflared || true)
 CLOUDFLARED_DIR="${HOME}/.cloudflared"
-CONFIG_FILE="${CLOUDFLARED_DIR}/djonehub.yml"
+CONFIG_FILE="${CLOUDFLARED_DIR}/djsmsforward.yml"
 CERT_FILE="${CLOUDFLARED_DIR}/cert.pem"
-DJONEHUB_COMMAND=$(command -v djonehub || true)
-LAUNCH_AGENT_LABEL="com.djonehub.cloudflared"
+APP_COMMAND=$(command -v djsmsforward || true)
+LAUNCH_AGENT_LABEL="com.djsmsforward.cloudflared"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
-LOG_DIR="${HOME}/Library/Logs/DJOneHub"
+LOG_DIR="${HOME}/Library/Logs/DJSMSForward"
 
 if [ -z "${PUBLIC_HOST}" ]; then
-  echo "用法：$0 djonehub.example.com [tunnel-name]" >&2
+  echo "用法：$0 sms.example.com [tunnel-name]" >&2
   exit 2
 fi
 case "${PUBLIC_HOST}" in
@@ -21,7 +21,7 @@ case "${PUBLIC_HOST}" in
 esac
 case "${PUBLIC_HOST}" in
   *.*) ;;
-  *) echo "hostname 必须包含域名，例如 djonehub.example.com。" >&2; exit 2 ;;
+  *) echo "hostname 必须包含域名，例如 sms.example.com。" >&2; exit 2 ;;
 esac
 case "${TUNNEL_NAME}" in
   ""|*[!A-Za-z0-9_-]*) echo "Tunnel 名称只能包含字母、数字、下划线和连字符。" >&2; exit 2 ;;
@@ -30,8 +30,8 @@ if [ -z "${CLOUDFLARED}" ]; then
   echo "未找到 cloudflared，请先执行 brew install cloudflared。" >&2
   exit 1
 fi
-if [ -z "${DJONEHUB_COMMAND}" ]; then
-  echo "未找到 djonehub 命令，请先安装 DJOneHub。" >&2
+if [ -z "${APP_COMMAND}" ]; then
+  echo "未找到 djsmsforward 命令，请先安装 DJSMSForward。" >&2
   exit 1
 fi
 
@@ -84,15 +84,15 @@ if [ ! -f "${CREDENTIALS_FILE}" ]; then
   echo "缺少 Tunnel 凭据文件：${CREDENTIALS_FILE}" >&2
   exit 1
 fi
-if [ -f "${CONFIG_FILE}" ] && ! grep -q '^# Managed by DJOneHub$' "${CONFIG_FILE}"; then
-  echo "已有非 DJOneHub 管理的 ${CONFIG_FILE}，为避免覆盖已停止。" >&2
+if [ -f "${CONFIG_FILE}" ] && ! grep -q '^# Managed by DJSMSForward$' "${CONFIG_FILE}"; then
+  echo "已有非 DJSMSForward 管理的 ${CONFIG_FILE}，为避免覆盖已停止。" >&2
   exit 1
 fi
 
 umask 077
 TEMPORARY_CONFIG="${CONFIG_FILE}.tmp.$$"
 {
-  echo "# Managed by DJOneHub"
+  echo "# Managed by DJSMSForward"
   echo "tunnel: ${TUNNEL_ID}"
   echo "credentials-file: ${CREDENTIALS_FILE}"
   echo "ingress:"
@@ -104,7 +104,7 @@ mv -f "${TEMPORARY_CONFIG}" "${CONFIG_FILE}"
 
 "${CLOUDFLARED}" tunnel --config "${CONFIG_FILE}" ingress validate
 "${CLOUDFLARED}" tunnel route dns "${TUNNEL_ID}" "${PUBLIC_HOST}"
-"${DJONEHUB_COMMAND}" cloudflare "https://${PUBLIC_HOST}"
+"${APP_COMMAND}" cloudflare "https://${PUBLIC_HOST}"
 
 mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
 TEMPORARY_AGENT="${LAUNCH_AGENT}.tmp.$$"
@@ -132,9 +132,9 @@ chmod 600 "${LAUNCH_AGENT}"
 launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_AGENT}"
 launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}"
-"${DJONEHUB_COMMAND}" service install
+"${APP_COMMAND}" service install
 
 echo
 echo "Cloudflare Tunnel 已配置：https://${PUBLIC_HOST}"
-echo "DJOneHub 与 Tunnel 均已设置为登录后自动运行。"
+echo "DJSMSForward 与 Tunnel 均已设置为登录后自动运行。"
 echo "建议在 Cloudflare Access 中仅允许你的邮箱访问该 hostname。"

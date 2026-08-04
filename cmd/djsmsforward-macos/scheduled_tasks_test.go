@@ -64,7 +64,7 @@ func TestNextTaskRunUsesLocalTimeAndInterval(t *testing.T) {
 }
 
 func TestScheduledTaskPersistenceAndPermissions(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "DJOneHub")
+	dir := filepath.Join(t.TempDir(), "DJSMSForward")
 	path := filepath.Join(dir, "scheduled-tasks.json")
 	service, err := newScheduledTaskService(path, func(string, string) (int, error) { return 1, nil }, nil)
 	if err != nil {

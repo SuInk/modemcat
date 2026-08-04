@@ -116,7 +116,7 @@ func TestNotificationConfigPersistencePermissionsAndSecretRetention(t *testing.T
 }
 
 func TestNotificationConfigLoadSecuresExistingFile(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "DJOneHub")
+	dir := filepath.Join(t.TempDir(), "DJSMSForward")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestQueuedNotificationsExpireOnConfigChange(t *testing.T) {
 }
 
 func TestConcurrentNotificationUpdatesPreservePartialFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "DJOneHub", "notifications.json")
+	path := filepath.Join(t.TempDir(), "DJSMSForward", "notifications.json")
 	service, err := newNotificationService(path, nil, newEventHub())
 	if err != nil {
 		t.Fatal(err)

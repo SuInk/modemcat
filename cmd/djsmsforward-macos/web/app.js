@@ -18,11 +18,11 @@ let scheduledTaskRenderSignature = "";
 function setThemePreference(theme) {
   if (theme === "light" || theme === "dark") {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("djonehub-theme", theme);
+    localStorage.setItem("djsmsforward-theme", theme);
     localStorage.removeItem("vohive-theme");
   } else {
     delete document.documentElement.dataset.theme;
-    localStorage.removeItem("djonehub-theme");
+    localStorage.removeItem("djsmsforward-theme");
     localStorage.removeItem("vohive-theme");
   }
   document.querySelectorAll("[data-theme-option]").forEach((button) => {
@@ -30,7 +30,7 @@ function setThemePreference(theme) {
   });
 }
 
-const savedTheme = localStorage.getItem("djonehub-theme") || localStorage.getItem("vohive-theme");
+const savedTheme = localStorage.getItem("djsmsforward-theme") || localStorage.getItem("vohive-theme");
 setThemePreference(savedTheme === "light" || savedTheme === "dark" ? savedTheme : "auto");
 document.querySelectorAll("[data-theme-option]").forEach((button) => {
   button.addEventListener("click", () => setThemePreference(button.dataset.themeOption));
@@ -707,7 +707,7 @@ function updateBrowserNotificationStatus() {
     status.textContent = "当前浏览器不可用";
     return;
   }
-  const enabled = localStorage.getItem("djonehub-browser-notifications") === "true" && Notification.permission === "granted";
+  const enabled = localStorage.getItem("djsmsforward-browser-notifications") === "true" && Notification.permission === "granted";
   toggle.checked = enabled;
   status.textContent = Notification.permission === "denied"
     ? "浏览器已拒绝权限"
@@ -716,9 +716,9 @@ function updateBrowserNotificationStatus() {
 
 function showBrowserNotification(event) {
   if (!browserNotificationsSupported()) return;
-  if (localStorage.getItem("djonehub-browser-notifications") !== "true") return;
+  if (localStorage.getItem("djsmsforward-browser-notifications") !== "true") return;
   if (Notification.permission !== "granted") return;
-  let title = event.title || "DJOneHub";
+  let title = event.title || "DJSMSForward";
   let body = event.body || "收到新的提醒";
   if (event.kind === "sms" && !$("#include-sms-body").checked) {
     body = `发件人：${event.sender || "未知号码"}`;
@@ -1195,7 +1195,7 @@ async function loadNetworkTraffic() {
     setValue("#traffic-session-rx", formatTrafficBytes(sample.session_rx_bytes), "neutral");
     setValue("#traffic-session-tx", formatTrafficBytes(sample.session_tx_bytes), "neutral");
     setValue("#traffic-session-total", formatTrafficBytes(sample.session_total_bytes), "emphasis");
-    $("#traffic-session-total").title = "本次启动期间的下载与上传流量之和；关闭 DJOneHub 后清零";
+    $("#traffic-session-total").title = "本次启动期间的下载与上传流量之和；关闭 DJSMSForward 后清零";
   } catch (error) {
     setValue("#traffic-rx-rate", "--", "muted");
     setValue("#traffic-tx-rate", "--", "muted");
@@ -1700,7 +1700,7 @@ function clearNotificationCredentialInputs() {
 
 $("#browser-notifications").addEventListener("change", async (event) => {
   if (!event.currentTarget.checked) {
-    localStorage.setItem("djonehub-browser-notifications", "false");
+    localStorage.setItem("djsmsforward-browser-notifications", "false");
     updateBrowserNotificationStatus();
     return;
   }
@@ -1709,7 +1709,7 @@ $("#browser-notifications").addEventListener("change", async (event) => {
     return;
   }
   const permission = await Notification.requestPermission();
-  localStorage.setItem("djonehub-browser-notifications", String(permission === "granted"));
+  localStorage.setItem("djsmsforward-browser-notifications", String(permission === "granted"));
   updateBrowserNotificationStatus();
 });
 

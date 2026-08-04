@@ -1,11 +1,11 @@
-# DJOneHub
+# DJSMSForward
 
-DJOneHub 是一款面向**大疆第一代 4G 模块**的第三方 WebUI 管理工具。它通过 USB 与模块现有接口通信，让模块无需虚拟机即可在 Mac 上完成短信收发、eSIM Profile 管理、AT 指令调试和 USB 4G 上网。项目只提供浏览器管理页面和本地后台进程，不包含原生 macOS `.app` 或菜单栏界面。
+DJSMSForward 是一款面向**大疆第一代 4G 模块**的第三方 WebUI 管理工具。它通过 USB 与模块现有接口通信，让模块无需虚拟机即可在 Mac 上完成短信收发、eSIM Profile 管理、AT 指令调试和 USB 4G 上网。项目只提供浏览器管理页面和本地后台进程，不包含原生 macOS `.app` 或菜单栏界面。
 
 程序及管理页面均在本机运行，默认只监听 `127.0.0.1:7575`，不会主动把 SIM、短信或卡片资料上传到远程服务器。
 
 > [!IMPORTANT]
-> DJOneHub 是非官方第三方项目，与 DJI、Quectel、运营商及 eSIM 卡片厂商不存在隶属、授权或合作关系。
+> DJSMSForward 是非官方第三方项目，与 DJI、Quectel、运营商及 eSIM 卡片厂商不存在隶属、授权或合作关系。
 
 ## 功能概览
 
@@ -59,7 +59,7 @@ DJOneHub 是一款面向**大疆第一代 4G 模块**的第三方 WebUI 管理�
 
 ## 接入原理
 
-大疆第一代 4G 模块通过不同的 USB 组合模式向 macOS 暴露管理接口或网络接口。DJOneHub 没有修改模块固件，而是根据模块现有 USB 接口实现本机通信，并预设了常用的短信模式和上网模式。
+大疆第一代 4G 模块通过不同的 USB 组合模式向 macOS 暴露管理接口或网络接口。DJSMSForward 没有修改模块固件，而是根据模块现有 USB 接口实现本机通信，并预设了常用的短信模式和上网模式。
 
 | 模式 | 页面名称 | 主要用途 |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ GitHub 自动生成的 `Source code (zip)` 和 `Source code (tar.gz)` 是源码�
 验证 ZIP 时，在下载目录执行：
 
 ```sh
-shasum -a 256 DJOneHub-*.zip
+shasum -a 256 DJSMSForward-*.zip
 ```
 
 将输出与 `.sha256` 文件中的值比较即可。
@@ -91,7 +91,7 @@ shasum -a 256 DJOneHub-*.zip
 1. 完整解压下载的 ZIP，不要只从压缩包中拖出单个文件。
 2. 打开 macOS“终端”。
 3. 输入 `cd `，在 `cd` 后保留一个空格。
-4. 把解压得到的 DJOneHub 文件夹拖入终端窗口，然后按回车。
+4. 把解压得到的 DJSMSForward 文件夹拖入终端窗口，然后按回车。
 5. 执行安装命令：
 
 ```sh
@@ -105,26 +105,26 @@ shasum -a 256 DJOneHub-*.zip
 程序主体会安装到：
 
 ```text
-/usr/local/libexec/djonehub
+/usr/local/libexec/djsmsforward
 ```
 
 终端命令入口会创建在：
 
 ```text
-/usr/local/bin/djonehub
+/usr/local/bin/djsmsforward
 ```
 
-安装完成后，无论终端当前位于哪个目录，都可以直接使用 `djonehub` 命令。
+安装完成后，无论终端当前位于哪个目录，都可以直接使用 `djsmsforward` 命令。
 
 ## 首次启动
 
 1. 先将 SIM 或 eUICC 卡片插入模块。
 2. 使用支持数据传输的 USB-C 线连接模块与 Mac。
 3. 等待 macOS 完成 USB 设备枚举。
-4. 在终端中启动 DJOneHub：
+4. 在终端中启动 DJSMSForward：
 
 ```sh
-djonehub start
+djsmsforward start
 ```
 
 程序会自动打开本机管理页面：
@@ -138,20 +138,20 @@ http://127.0.0.1:7575
 启动程序的终端需要保持运行。按 `Control+C` 可以停止程序。如果浏览器没有自动打开，可以执行：
 
 ```sh
-djonehub open
+djsmsforward open
 ```
 
 需要登录后自动在后台运行时，可以执行：
 
 ```sh
-djonehub service install
+djsmsforward service install
 ```
 
 查看或移除后台服务：
 
 ```sh
-djonehub service status
-djonehub service remove
+djsmsforward service status
+djsmsforward service remove
 ```
 
 ## macOS 阻止打开时
@@ -164,13 +164,13 @@ djonehub service remove
 系统设置 -> 隐私与安全性
 ```
 
-在安全提示附近选择“仍要打开”，然后重新启动 DJOneHub。
+在安全提示附近选择“仍要打开”，然后重新启动 DJSMSForward。
 
 如果系统仍提示文件已损坏，可以回到解压后的发行包目录执行：
 
 ```sh
-xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
-./djonehub start
+xattr -dr com.apple.quarantine ./djsmsforward ./bin ./lib
+./djsmsforward start
 ```
 
 > [!CAUTION]
@@ -182,7 +182,7 @@ xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
 
 短信模式用于接收和发送短信、自动轮询新短信、提取常见验证码、管理 eSIM Profile 和发送 AT 指令。
 
-收件箱会把最近 500 条短信持久保存到 `~/Library/Application Support/DJOneHub/sms-inbox.json`，服务或 Mac 重启后仍会恢复。文件权限为 `0600`，只有当前 macOS 用户可以读取。模块 `ME` 自动清理默认关闭；“清空模块 ME”只在用户确认后清理模块内部存储，例如二手模块可能残留的历史短信，不会删除 SIM 卡 `SM` 存储或本地历史。
+收件箱会把最近 500 条短信持久保存到 `~/Library/Application Support/DJSMSForward/sms-inbox.json`，服务或 Mac 重启后仍会恢复。文件权限为 `0600`，只有当前 macOS 用户可以读取。模块 `ME` 自动清理默认关闭；“清空模块 ME”只在用户确认后清理模块内部存储，例如二手模块可能残留的历史短信，不会删除 SIM 卡 `SM` 存储或本地历史。
 
 发送国际短信时，请填写完整国际号码，区号和号码之间不需要空格：
 
@@ -197,12 +197,12 @@ xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
 
 “定时任务”页面可以按指定天数和本机时间周期发送短信，也支持暂停、编辑、删除和立即执行。任务发送成功后，下一次执行时间按任务周期计算；发送失败则在下一个指定时间重试，最长保留 100 条执行记录。
 
-每次发送成功或失败都会生成结果提醒，并发送到当前已经启用且配置完整的浏览器、Bark 和 Telegram 通道。定时任务必须在 DJOneHub 后台运行时才能触发；Mac 关机、睡眠或服务退出期间不会执行，服务恢复后会补执行已经到期的任务。
+每次发送成功或失败都会生成结果提醒，并发送到当前已经启用且配置完整的浏览器、Bark 和 Telegram 通道。定时任务必须在 DJSMSForward 后台运行时才能触发；Mac 关机、睡眠或服务退出期间不会执行，服务恢复后会补执行已经到期的任务。
 
 任务配置与短信内容保存在：
 
 ```text
-~/Library/Application Support/DJOneHub/scheduled-tasks.json
+~/Library/Application Support/DJSMSForward/scheduled-tasks.json
 ```
 
 该文件权限为 `0600`。任务短信会产生运营商短信费用或套餐用量，建议先用“立即执行”验证目标号码和短信内容。
@@ -211,7 +211,7 @@ xattr -dr com.apple.quarantine ./djonehub ./bin ./lib
 
 WebUI 结合模块的 `RING/+CLIP` 事件与 `AT+CLCC` 校准显示来电号码、当前状态和最近记录，并提供拒接按钮。呼叫等待使用独立 AT 控制，避免拒接等待来电时挂断已接通的通话。USB 忙于较长的短信或卡片操作、模块固件不输出呼叫事件、或来电极短时，提醒仍可能延迟或漏报。
 
-最近通话记录只保存在当前 DJOneHub 进程内存中，重启服务后会清空。USB 连接中断时记录会标记为“结果未知”，不会误报为未接来电。
+最近通话记录只保存在当前 DJSMSForward 进程内存中，重启服务后会清空。USB 连接中断时记录会标记为“结果未知”，不会误报为未接来电。
 
 当前实现只负责呼叫检测与 AT 控制。模块没有向 macOS 提供已验证可用的双向语音音频，因此不提供网页接听、网页拨号或已接通通话的网页挂断功能。
 
@@ -224,7 +224,7 @@ WebUI 结合模块的 `RING/+CLIP` 事件与 `AT+CLCC` 校准显示来电号码�
 Bark 与 Telegram 默认关闭。通知设置保存在：
 
 ```text
-~/Library/Application Support/DJOneHub/notifications.json
+~/Library/Application Support/DJSMSForward/notifications.json
 ```
 
 文件权限为 `0600`，Web API 不会回传 Bark Device Key 或 Telegram Bot Token。短信正文默认不会发送给第三方；可在提醒页面单独启用。使用公共 Bark 服务或 Telegram 前，应自行确认其隐私与网络可达性。Telegram Bot 需要先由目标用户发起 `/start`，或先加入目标群组。
@@ -238,10 +238,10 @@ WebUI 强制只监听并接受本机回环地址，不能通过 `-listen 0.0.0.0
 管理员账号配置保存在：
 
 ```text
-~/Library/Application Support/DJOneHub/auth.json
+~/Library/Application Support/DJSMSForward/auth.json
 ```
 
-文件权限为 `0600`，只保存账号和 bcrypt 密码哈希，不保存明文密码。登录会话有效期为 24 小时并且只存在当前 DJOneHub 进程内存中；重启服务后需要重新登录。WebUI 顶部的“账号”按钮可以修改账号与密码，修改后所有旧会话都会失效。
+文件权限为 `0600`，只保存账号和 bcrypt 密码哈希，不保存明文密码。登录会话有效期为 24 小时并且只存在当前 DJSMSForward 进程内存中；重启服务后需要重新登录。WebUI 顶部的“账号”按钮可以修改账号与密码，修改后所有旧会话都会失效。
 
 ### Cloudflare Tunnel 远程访问
 
@@ -251,9 +251,9 @@ WebUI 强制只监听并接受本机回环地址，不能通过 `-listen 0.0.0.0
 ./cloudflare-setup sms.example.com
 ```
 
-脚本会创建命名 Tunnel、写入独立的 `~/.cloudflared/djonehub.yml`、添加 DNS 路由，并安装 `com.djonehub.cloudflared` 与 `com.djonehub.webui` 两个用户级后台服务。它不会修改或重启机器上已有的其他 Tunnel。脚本还会把唯一允许的公网来源设置为 `https://sms.example.com`。DJOneHub 仍只监听 `127.0.0.1:7575`，不会直接开放局域网端口；公网请求必须通过配置的 HTTPS hostname，其他 Host 会被拒绝。
+脚本会创建命名 Tunnel、写入独立的 `~/.cloudflared/djsmsforward.yml`、添加 DNS 路由，并安装 `com.djsmsforward.cloudflared` 与 `com.djsmsforward.webui` 两个用户级后台服务。它不会修改或重启机器上已有的其他 Tunnel。脚本还会把唯一允许的公网来源设置为 `https://sms.example.com`。DJSMSForward 仍只监听 `127.0.0.1:7575`，不会直接开放局域网端口；公网请求必须通过配置的 HTTPS hostname，其他 Host 会被拒绝。
 
-远程页面依赖 Mac、DJOneHub 和 `cloudflared` 持续运行。建议另外在 Cloudflare Zero Trust 中为该 hostname 配置 Access 策略，只允许自己的邮箱；DJOneHub 登录仍保留为第二层保护。首次管理员设置始终只允许从 `http://127.0.0.1:7575` 完成。
+远程页面依赖 Mac、DJSMSForward 和 `cloudflared` 持续运行。建议另外在 Cloudflare Zero Trust 中为该 hostname 配置 Access 策略，只允许自己的邮箱；DJSMSForward 登录仍保留为第二层保护。首次管理员设置始终只允许从 `http://127.0.0.1:7575` 完成。
 
 ### eSIM 与卡片管理
 
@@ -283,7 +283,7 @@ WebUI 强制只监听并接受本机回环地址，不能通过 `-listen 0.0.0.0
 
 ![上网模式下的实时速度和本次流量](docs/images/network-traffic.png)
 
-首页会显示当前下载、当前上传、本次下载、本次上传和本次总流量。本次总流量等于本次下载与本次上传之和，只统计当前 DJOneHub 进程运行期间、由 macOS 明确识别为 Baiwang/DJI 的 USB 网卡数据；刷新网页不会清零，关闭程序后，下次启动会从零重新统计。短信模式下没有对应 USB 网卡，因此流量显示为不可用。
+首页会显示当前下载、当前上传、本次下载、本次上传和本次总流量。本次总流量等于本次下载与本次上传之和，只统计当前 DJSMSForward 进程运行期间、由 macOS 明确识别为 Baiwang/DJI 的 USB 网卡数据；刷新网页不会清零，关闭程序后，下次启动会从零重新统计。短信模式下没有对应 USB 网卡，因此流量显示为不可用。
 
 在 macOS 网络设置中可以找到模块对应的网络服务，本机实测名称为 `Baiwang`：
 
@@ -312,34 +312,34 @@ AT 指令可以改变网络注册、PDP、USB 模式、短信存储和 SIM 状�
 ## 常用命令
 
 ```text
-djonehub start          启动并自动打开管理网页
-djonehub start --demo   启动无硬件演示模式
-djonehub stop           停止正在运行的程序
-djonehub status         查看运行状态
-djonehub logs           查看实时日志（Control+C 退出日志）
-djonehub open           打开管理网页
+djsmsforward start          启动并自动打开管理网页
+djsmsforward start --demo   启动无硬件演示模式
+djsmsforward stop           停止正在运行的程序
+djsmsforward status         查看运行状态
+djsmsforward logs           查看实时日志（Control+C 退出日志）
+djsmsforward open           打开管理网页
 ```
 
-最直接的停止方式，是回到启动 DJOneHub 的终端并按 `Control+C`。也可以在另一个终端中执行：
+最直接的停止方式，是回到启动 DJSMSForward 的终端并按 `Control+C`。也可以在另一个终端中执行：
 
 ```sh
-djonehub stop
+djsmsforward stop
 ```
 
-建议先停止 DJOneHub，再拔出模块。如果直接拔出，程序会继续运行并等待设备重新连接。
+建议先停止 DJSMSForward，再拔出模块。如果直接拔出，程序会继续运行并等待设备重新连接。
 
 ## 日志与本地数据
 
 日志保存在：
 
 ```text
-~/Library/Logs/DJOneHub/djonehub.log
+~/Library/Logs/DJSMSForward/djsmsforward.log
 ```
 
 运行状态和本地数据目录为：
 
 ```text
-~/Library/Application Support/DJOneHub
+~/Library/Application Support/DJSMSForward
 ```
 
 终端默认只显示启动、停止和错误摘要，底层 USB 日志写入日志文件。管理页面默认仅供本机访问，同一局域网内的其他设备不能直接访问。
@@ -349,21 +349,21 @@ djonehub stop
 先停止程序：
 
 ```sh
-djonehub stop
+djsmsforward stop
 ```
 
 删除命令入口和程序主体：
 
 ```sh
-sudo rm -f /usr/local/bin/djonehub
-sudo rm -rf /usr/local/libexec/djonehub
+sudo rm -f /usr/local/bin/djsmsforward
+sudo rm -rf /usr/local/libexec/djsmsforward
 ```
 
 如需一并删除日志和本地运行数据：
 
 ```sh
-rm -rf "$HOME/Library/Logs/DJOneHub"
-rm -rf "$HOME/Library/Application Support/DJOneHub"
+rm -rf "$HOME/Library/Logs/DJSMSForward"
+rm -rf "$HOME/Library/Application Support/DJSMSForward"
 ```
 
 ## 免安装运行
@@ -371,7 +371,7 @@ rm -rf "$HOME/Library/Application Support/DJOneHub"
 如果不希望安装到 `/usr/local`，可以保留完整解压目录，并在该目录执行：
 
 ```sh
-./djonehub start
+./djsmsforward start
 ```
 
 ## 从源码构建
@@ -414,7 +414,7 @@ dist/release/
 
 ### 切换模式后设备短暂消失
 
-模式切换会触发 USB 重新枚举，短暂断开通常不是故障。等待几秒，让页面重新识别模块。如果长时间没有恢复，可以停止 DJOneHub，重新插拔模块后再次启动。
+模式切换会触发 USB 重新枚举，短暂断开通常不是故障。等待几秒，让页面重新识别模块。如果长时间没有恢复，可以停止 DJSMSForward，重新插拔模块后再次启动。
 
 ### 换卡后仍显示旧信息
 
@@ -456,13 +456,14 @@ macOS 的代理配置与网络服务相关。切换到 USB 网卡后，可能需
 
 ## 项目来源与声明
 
-DJOneHub 是在研究大疆第一代 4G 模块和原 VoHive 项目的基础上继续开发的 macOS 工具。仓库包含基于原 VoHive 代码演进而来的部分，以及为 macOS USB 通信、设备热插拔、本机网页管理、短信、eSIM、网络诊断和发行打包新增或修改的实现。
+DJSMSForward 是在 VoHive 与 DJOneHub 既有工作的基础上独立维护的 macOS 工具。仓库保留完整来源历史，并包含为 macOS USB 通信、设备热插拔、本机网页管理、短信、eSIM、通知、定时任务、网络诊断和发行打包新增或修改的实现。
 
 本项目不代表 DJI、Quectel、任何运营商或 eSIM 卡片厂商。相关商标和产品名称归各自权利人所有。
 
 上游作者署名、来源和第三方组件说明见：
 
 - [LICENSE](LICENSE)
+- [NOTICE](NOTICE)
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 各 `third_party` 目录内随附的许可证与声明
 
@@ -488,4 +489,4 @@ Required Notice: Copyright iniwex5 (https://github.com/iniwex5/vohive)
 
 ## 结束语
 
-如果 DJOneHub 对你有帮助，欢迎通过 Issue 分享兼容性结果、问题日志或改进建议。提交截图和日志前，请务必隐藏手机号、EID、ICCID、IMSI 和短信验证码等隐私信息。
+如果 DJSMSForward 对你有帮助，欢迎通过 Issue 分享兼容性结果、问题日志或改进建议。提交截图和日志前，请务必隐藏手机号、EID、ICCID、IMSI 和短信验证码等隐私信息。

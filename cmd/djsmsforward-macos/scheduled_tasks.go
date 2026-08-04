@@ -110,7 +110,7 @@ func scheduledTasksFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJOneHub", "scheduled-tasks.json"), nil
+	return filepath.Join(dir, "DJSMSForward", "scheduled-tasks.json"), nil
 }
 
 func (a *app) initScheduledTasks() {
@@ -556,11 +556,11 @@ func newScheduledTaskEvent(task scheduledTask, run scheduledTaskRun) notificatio
 		trigger = "立即执行"
 	}
 	kind := "scheduled_task_success"
-	title := "DJOneHub 定时任务成功"
+	title := "DJSMSForward 定时任务成功"
 	body := fmt.Sprintf("任务：%s\n目标：%s\n方式：%s\n短信分段：%d", task.Name, task.PhoneNumber, trigger, run.Segments)
 	if run.Status == "failed" {
 		kind = "scheduled_task_failure"
-		title = "DJOneHub 定时任务失败"
+		title = "DJSMSForward 定时任务失败"
 		body = fmt.Sprintf("任务：%s\n目标：%s\n方式：%s\n原因：%s", task.Name, task.PhoneNumber, trigger, valueOrUnknown(run.Error))
 	}
 	return notificationEvent{

@@ -27,7 +27,7 @@ func smsInboxFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJOneHub", "sms-inbox.json"), nil
+	return filepath.Join(dir, "DJSMSForward", "sms-inbox.json"), nil
 }
 
 func loadSMSInbox(path string) ([]receivedSMS, error) {

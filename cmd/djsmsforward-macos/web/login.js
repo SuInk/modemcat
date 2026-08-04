@@ -22,12 +22,12 @@ async function authAPI(path, options = {}) {
 function configureAuthForm(configured, setupAllowed) {
   if (!configured && !setupAllowed) {
     authTitle.textContent = "等待本机设置管理员账号";
-    authSubtitle.textContent = "请先在 Mac 本机打开 DJOneHub";
+    authSubtitle.textContent = "请先在 Mac 本机打开 DJSMSForward";
     authForm.hidden = true;
     return;
   }
   authMode = configured ? "login" : "setup";
-  authTitle.textContent = configured ? "登录 DJOneHub" : "设置管理员账号";
+  authTitle.textContent = configured ? "登录 DJSMSForward" : "设置管理员账号";
   authSubtitle.textContent = configured ? "本机管理后台" : "首次启动";
   authConfirmRow.hidden = configured;
   authConfirm.required = !configured;
@@ -49,7 +49,7 @@ async function loadAuthStatus() {
     configureAuthForm(Boolean(status.configured), Boolean(status.setup_allowed));
   } catch (error) {
     authTitle.textContent = "账号服务不可用";
-    authSubtitle.textContent = "请检查 DJOneHub 日志";
+    authSubtitle.textContent = "请检查 DJSMSForward 日志";
     authError.textContent = error.message;
   }
 }

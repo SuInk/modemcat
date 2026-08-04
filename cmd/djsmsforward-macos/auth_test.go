@@ -13,7 +13,7 @@ import (
 const testAuthPassword = "correct-horse-battery"
 
 func TestAuthSetupPersistsOnlyPasswordHash(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "DJOneHub")
+	directory := filepath.Join(t.TempDir(), "DJSMSForward")
 	path := filepath.Join(directory, "auth.json")
 	service := newAuthService(path)
 	if err := service.load(); err != nil {
@@ -118,7 +118,7 @@ func TestAuthMiddlewareRequiresSetupAndLogin(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("authenticated API status = %d, want %d", response.Code, http.StatusNoContent)
 	}
-	if got := request.Header.Get("X-DJOneHub-Username"); got != session.Username {
+	if got := request.Header.Get("X-DJSMSForward-Username"); got != session.Username {
 		t.Fatalf("authenticated username = %q, want %q", got, session.Username)
 	}
 }
@@ -135,7 +135,7 @@ func TestLoginSetsHardenedSessionCookie(t *testing.T) {
 		strings.NewReader(`{"username":"admin","password":"`+testAuthPassword+`"}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Host = "djonehub.example.com"
+	request.Host = "djsmsforward.example.com"
 	response := httptest.NewRecorder()
 	instance.loginAuth(response, request)
 	if response.Code != http.StatusOK {
@@ -159,10 +159,10 @@ func TestInitialSetupIsLoopbackOnly(t *testing.T) {
 	instance := &app{auth: service}
 	request := httptest.NewRequest(
 		http.MethodPost,
-		"https://djonehub.example.com/api/auth/setup",
+		"https://djsmsforward.example.com/api/auth/setup",
 		strings.NewReader(`{"username":"admin","password":"`+testAuthPassword+`"}`),
 	)
-	request.Host = "djonehub.example.com"
+	request.Host = "djsmsforward.example.com"
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	instance.setupAuth(response, request)

@@ -9,7 +9,7 @@ import (
 )
 
 func TestSMSInboxPersistsAcrossRestart(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "DJOneHub")
+	directory := filepath.Join(t.TempDir(), "DJSMSForward")
 	path := filepath.Join(directory, "sms-inbox.json")
 	first := &app{}
 	if err := first.initSMSInboxAt(path); err != nil {
@@ -59,7 +59,7 @@ func TestSMSInboxPersistsAcrossRestart(t *testing.T) {
 }
 
 func TestSMSInboxPersistsMessagesReceivedBeforeInitialization(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "DJOneHub", "sms-inbox.json")
+	path := filepath.Join(t.TempDir(), "DJSMSForward", "sms-inbox.json")
 	message := receivedSMS{Sender: "10001", Content: "early message", Timestamp: time.Now()}
 	instance := &app{sms: []receivedSMS{message}}
 	if err := instance.initSMSInboxAt(path); err != nil {
