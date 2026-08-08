@@ -22,6 +22,22 @@ func validScheduledTaskInput() scheduledTaskInput {
 	}
 }
 
+func TestScheduledTaskSendAppearsInConversationHistory(t *testing.T) {
+	instance := &app{demo: true}
+	instance.initScheduledTasks()
+	segments, err := instance.scheduledTasks.executeSMS("10086", "CXLL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segments != 1 || len(instance.sms) != 1 {
+		t.Fatalf("send result = segments %d messages %d", segments, len(instance.sms))
+	}
+	message := instance.sms[0]
+	if message.Direction != "outgoing" || message.Recipient != "10086" || message.Content != "CXLL" {
+		t.Fatalf("scheduled SMS history = %+v", message)
+	}
+}
+
 func TestValidateScheduledTaskInput(t *testing.T) {
 	valid := validScheduledTaskInput()
 	if err := validateScheduledTaskInput(valid); err != nil {
@@ -64,7 +80,7 @@ func TestNextTaskRunUsesLocalTimeAndInterval(t *testing.T) {
 }
 
 func TestScheduledTaskPersistenceAndPermissions(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "DJSMSForward")
+	dir := filepath.Join(t.TempDir(), "ModemCat")
 	path := filepath.Join(dir, "scheduled-tasks.json")
 	service, err := newScheduledTaskService(path, func(string, string) (int, error) { return 1, nil }, nil)
 	if err != nil {

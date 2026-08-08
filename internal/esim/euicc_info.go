@@ -3,8 +3,8 @@ package esim
 import (
 	"fmt"
 
-	"github.com/SuInk/djsmsforward/internal/esim/pki"
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/internal/esim/pki"
+	"github.com/SuInk/modemcat/pkg/logger"
 	"github.com/damonto/euicc-go/bertlv"
 	"github.com/damonto/euicc-go/bertlv/primitive"
 	"github.com/damonto/euicc-go/lpa"

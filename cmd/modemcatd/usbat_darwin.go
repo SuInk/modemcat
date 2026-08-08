@@ -16,11 +16,17 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/SuInk/modemcat/internal/modem"
 )
 
 const (
 	djiUSBVendorID        = 0x2ca3
 	djiUSBProductID       = 0x4006
+	quectelUSBVendorID    = 0x2c7c
+	quectelEC25ProductID  = 0x0125
+	airM2MUSBVendorID     = 0x19d1
+	air780USBProductID    = 0x0001
 	usbATCallURCQueueSize = 32
 	usbATURCLineLimit     = 4096
 	usbATDrainMaxReads    = 32
@@ -36,6 +42,7 @@ type usbATCallURC struct {
 type usbAT struct {
 	ctx         *C.libusb_context
 	handle      *C.libusb_device_handle
+	identity    usbATIdentity
 	iface       int
 	endpointIn  byte
 	endpointOut byte
@@ -55,15 +62,45 @@ type usbATCandidate struct {
 	endpointOut byte
 }
 
-func openDJIUSBAT() (*usbAT, error) {
+// usbATIdentity 是一个可识别的模块 USB 身份。
+//
+// 社区教程普遍会用 AT+QCFG="usbid" 把大疆模块的 USB 身份改写成标准移远 EC25，好让
+// Linux 的 option/qmi_wwan 驱动和 ModemManager 自动识别。改写只影响 USB 描述符，
+// 固件和 AT 指令集完全不变，因此两种身份都要认。
+type usbATIdentity struct {
+	vendorID  uint16
+	productID uint16
+	label     string
+	family    modem.ATFamily
+}
+
+var usbATIdentities = []usbATIdentity{
+	{djiUSBVendorID, djiUSBProductID, "DJI Cellular", modem.ATFamilyQuectel},
+	{quectelUSBVendorID, quectelEC25ProductID, "Quectel EC25 (改写身份)", modem.ATFamilyQuectel},
+	{airM2MUSBVendorID, air780USBProductID, "AirM2M Air780", modem.ATFamilyAirM2M},
+}
+
+func openModuleUSBAT() (*usbAT, error) {
 	var ctx *C.libusb_context
 	if rc := C.libusb_init(&ctx); rc != 0 {
 		return nil, fmt.Errorf("libusb init: %s", usbErrorName(rc))
 	}
-	handle := C.libusb_open_device_with_vid_pid(ctx, djiUSBVendorID, djiUSBProductID)
+
+	var (
+		handle   *C.libusb_device_handle
+		identity usbATIdentity
+		searched []string
+	)
+	for _, id := range usbATIdentities {
+		searched = append(searched, fmt.Sprintf("%04x:%04x", id.vendorID, id.productID))
+		if h := C.libusb_open_device_with_vid_pid(ctx, C.uint16_t(id.vendorID), C.uint16_t(id.productID)); h != nil {
+			handle, identity = h, id
+			break
+		}
+	}
 	if handle == nil {
 		C.libusb_exit(ctx)
-		return nil, errors.New("DJI USB AT device 2ca3:4006 not found")
+		return nil, fmt.Errorf("未找到模块 USB AT 接口，已尝试 %s", strings.Join(searched, " 和 "))
 	}
 	candidates, err := usbATCandidates(handle)
 	if err != nil {
@@ -80,6 +117,7 @@ func openDJIUSBAT() (*usbAT, error) {
 		dev := &usbAT{
 			ctx:         ctx,
 			handle:      handle,
+			identity:    identity,
 			iface:       candidate.iface,
 			endpointIn:  candidate.endpointIn,
 			endpointOut: candidate.endpointOut,
@@ -101,7 +139,14 @@ func openDJIUSBAT() (*usbAT, error) {
 	if lastErr != nil {
 		return nil, lastErr
 	}
-	return nil, errors.New("no USB bulk interface candidates found for DJI AT bridge")
+	return nil, errors.New("no USB bulk interface candidates found for a supported modem AT bridge")
+}
+
+func (u *usbAT) Family() modem.ATFamily {
+	if u == nil {
+		return modem.ATFamilyUnknown
+	}
+	return u.identity.family
 }
 
 func usbATCandidates(handle *C.libusb_device_handle) ([]usbATCandidate, error) {
@@ -438,7 +483,8 @@ func (u *usbAT) Description() string {
 	if u == nil {
 		return "USB AT"
 	}
-	return fmt.Sprintf("USB AT · 2ca3:4006 interface %d out 0x%02x in 0x%02x",
+	return fmt.Sprintf("USB AT · %s %04x:%04x interface %d out 0x%02x in 0x%02x",
+		u.identity.label, u.identity.vendorID, u.identity.productID,
 		u.iface, u.endpointOut, u.endpointIn)
 }
 

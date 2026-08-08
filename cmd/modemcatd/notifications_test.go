@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -33,9 +34,12 @@ func TestNotificationSettingsRedactSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.config.Bark.DeviceKey = "bark-secret-key"
-	service.config.Telegram.BotToken = "telegram-secret-token"
-	service.config.Telegram.ChatID = "123456"
+	service.config.Channels = []channelInstance{
+		{ID: "c1", Type: "bark", Enabled: true, Settings: channelSettings{
+			"push_url": "https://api.day.app/bark-secret-key/"}},
+		{ID: "c2", Type: "telegram", Enabled: true, Settings: channelSettings{
+			"bot_token": "telegram-secret-token", "chat_id": "123456"}},
+	}
 
 	data, err := json.Marshal(service.publicSettings())
 	if err != nil {
@@ -47,7 +51,7 @@ func TestNotificationSettingsRedactSecrets(t *testing.T) {
 			t.Fatalf("public settings leaked %q: %s", secret, text)
 		}
 	}
-	if !strings.Contains(text, `"device_key_configured":true`) ||
+	if !strings.Contains(text, `"push_url_configured":true`) ||
 		!strings.Contains(text, `"bot_token_configured":true`) {
 		t.Fatalf("public settings did not report configured credentials: %s", text)
 	}
@@ -59,22 +63,16 @@ func TestNotificationConfigPersistencePermissionsAndSecretRetention(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	barkEnabled := true
-	telegramEnabled := true
-	barkURL := "https://api.day.app"
-	telegramURL := "https://api.telegram.org"
-	barkKey := "bark-key"
-	botToken := "123456:telegram-token"
-	chatID := "-100123456"
-	update := notificationSettingsUpdate{}
-	update.Bark.Enabled = &barkEnabled
-	update.Bark.BaseURL = &barkURL
-	update.Bark.DeviceKey = &barkKey
-	update.Telegram.Enabled = &telegramEnabled
-	update.Telegram.BaseURL = &telegramURL
-	update.Telegram.BotToken = &botToken
-	update.Telegram.ChatID = &chatID
-	if err := service.update(update); err != nil {
+	const (
+		barkURL  = "https://api.day.app/bark-key/"
+		botToken = "123456:telegram-token"
+	)
+	if err := service.update(notificationSettingsUpdate{Channels: &[]channelUpdate{
+		{ID: "bark-1", Type: "bark", Name: "Bark", Enabled: true,
+			Settings: channelSettings{"push_url": barkURL, "call_alarm": true}},
+		{ID: "tg-1", Type: "telegram", Name: "Telegram", Enabled: true,
+			Settings: channelSettings{"bot_token": botToken, "chat_id": "-100123456"}},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,43 +84,84 @@ func TestNotificationConfigPersistencePermissionsAndSecretRetention(t *testing.T
 		t.Fatalf("notification config mode = %o, want 600", got)
 	}
 
-	newChatID := "@alerts"
-	retain := notificationSettingsUpdate{}
-	retain.Telegram.ChatID = &newChatID
-	if err := service.update(retain); err != nil {
+	// 前端拿不到明文密钥，改备注或 Chat ID 时不会回传它们——此时必须沿用原值。
+	if err := service.update(notificationSettingsUpdate{Channels: &[]channelUpdate{
+		{ID: "bark-1", Type: "bark", Name: "改个名", Enabled: true,
+			Settings: channelSettings{"call_alarm": true}},
+		{ID: "tg-1", Type: "telegram", Name: "Telegram", Enabled: true,
+			Settings: channelSettings{"chat_id": "@alerts"}},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := service.configSnapshot()
-	if cfg.Bark.DeviceKey != barkKey || cfg.Telegram.BotToken != botToken {
-		t.Fatalf("empty update replaced saved credentials: %+v", service.publicSettings())
+	bark, tg := channelByID(cfg, "bark-1"), channelByID(cfg, "tg-1")
+	if bark.Settings.String("push_url") != barkURL || tg.Settings.String("bot_token") != botToken {
+		t.Fatalf("omitting secret fields wiped saved credentials: %+v", cfg.Channels)
 	}
-	if cfg.Telegram.ChatID != newChatID {
-		t.Fatalf("chat ID = %q, want %q", cfg.Telegram.ChatID, newChatID)
+	if tg.Settings.String("chat_id") != "@alerts" || bark.Name != "改个名" {
+		t.Fatalf("non-secret fields were not applied: %+v", cfg.Channels)
 	}
 
-	disable := false
-	clear := notificationSettingsUpdate{}
-	clear.Bark.Enabled = &disable
-	clear.Bark.ClearDeviceKey = true
-	clear.Telegram.Enabled = &disable
-	clear.Telegram.ClearBotToken = true
-	if err := service.update(clear); err != nil {
+	// 显式传空串才是清除。
+	if err := service.update(notificationSettingsUpdate{Channels: &[]channelUpdate{
+		{ID: "bark-1", Type: "bark", Enabled: false, Settings: channelSettings{"push_url": ""}},
+		{ID: "tg-1", Type: "telegram", Enabled: false, Settings: channelSettings{"bot_token": ""}},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg = service.configSnapshot()
-	if cfg.Bark.DeviceKey != "" || cfg.Telegram.BotToken != "" {
-		t.Fatal("explicit clear did not remove saved credentials")
+	if channelByID(cfg, "bark-1").Settings.String("push_url") != "" ||
+		channelByID(cfg, "tg-1").Settings.String("bot_token") != "" {
+		t.Fatal("explicit empty string did not clear saved credentials")
 	}
 }
 
+// 删除渠道就是提交一个不含它的列表。
+func TestNotificationChannelsCanBeRemoved(t *testing.T) {
+	service, _ := newNotificationService("", nil, newEventHub())
+	if err := service.update(notificationSettingsUpdate{Channels: &[]channelUpdate{
+		{ID: "a", Type: "bark", Enabled: true, Settings: channelSettings{"push_url": "https://api.day.app/k1/"}},
+		{ID: "b", Type: "bark", Enabled: true, Settings: channelSettings{"push_url": "https://api.day.app/k2/"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(service.configSnapshot().Channels); got != 2 {
+		t.Fatalf("同类型应能配多条，得到 %d 条", got)
+	}
+	if err := service.update(notificationSettingsUpdate{Channels: &[]channelUpdate{
+		{ID: "b", Type: "bark", Enabled: true, Settings: channelSettings{}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := service.configSnapshot()
+	if len(cfg.Channels) != 1 || cfg.Channels[0].ID != "b" {
+		t.Fatalf("提交不含 a 的列表后应只剩 b: %+v", cfg.Channels)
+	}
+	if cfg.Channels[0].Settings.String("push_url") != "https://api.day.app/k2/" {
+		t.Fatal("保留下来的渠道丢了密钥")
+	}
+}
+
+func channelByID(cfg notificationConfig, id string) channelInstance {
+	for _, ch := range cfg.Channels {
+		if ch.ID == id {
+			return ch
+		}
+	}
+	return channelInstance{}
+}
+
 func TestNotificationConfigLoadSecuresExistingFile(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "DJSMSForward")
+	dir := filepath.Join(t.TempDir(), "ModemCat")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "notifications.json")
 	cfg := defaultNotificationConfig()
-	cfg.Bark.DeviceKey = "existing-secret"
+	cfg.Channels = []channelInstance{{
+		ID: "bark-1", Type: "bark", Name: "Bark", Enabled: true,
+		Settings: channelSettings{"push_url": "https://api.day.app/existing-secret/"},
+	}}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +180,9 @@ func TestNotificationConfigLoadSecuresExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if service.configSnapshot().Bark.DeviceKey != cfg.Bark.DeviceKey {
-		t.Fatal("existing notification config was not loaded")
+	bark := channelByID(service.configSnapshot(), "bark-1")
+	if !strings.Contains(bark.Settings.String("push_url"), "existing-secret") {
+		t.Fatalf("existing notification config was not loaded: %+v", service.configSnapshot().Channels)
 	}
 	for target, want := range map[string]os.FileMode{dir: 0o700, path: 0o600} {
 		info, err := os.Stat(target)
@@ -157,10 +197,12 @@ func TestNotificationConfigLoadSecuresExistingFile(t *testing.T) {
 
 func TestQueuedNotificationsExpireOnConfigChange(t *testing.T) {
 	service, _ := newNotificationService("", nil, newEventHub())
-	service.config.Bark.Enabled = true
-	service.config.Bark.DeviceKey = "old-key"
+	service.config.Channels = []channelInstance{
+		{ID: "c1", Type: "bark", Enabled: true, Settings: channelSettings{
+			"push_url": "https://api.day.app/old-key/"}},
+	}
 	service.submit(notificationEvent{ID: "sms-before-change", Kind: "sms", Message: "private"})
-	item := <-service.barkQueue
+	item := <-service.queues["bark"]
 
 	includeBody := true
 	update := notificationSettingsUpdate{IncludeSMSBody: &includeBody}
@@ -173,7 +215,7 @@ func TestQueuedNotificationsExpireOnConfigChange(t *testing.T) {
 }
 
 func TestConcurrentNotificationUpdatesPreservePartialFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "DJSMSForward", "notifications.json")
+	path := filepath.Join(t.TempDir(), "ModemCat", "notifications.json")
 	service, err := newNotificationService(path, nil, newEventHub())
 	if err != nil {
 		t.Fatal(err)
@@ -186,9 +228,12 @@ func TestConcurrentNotificationUpdatesPreservePartialFields(t *testing.T) {
 		{NotifyMissedCall: &falseValue},
 		{IncludeCallerNumber: &falseValue},
 	}
-	updates = append(updates, notificationSettingsUpdate{}, notificationSettingsUpdate{})
-	updates[len(updates)-2].Bark.CallAlarm = &falseValue
-	updates[len(updates)-1].Telegram.ProtectContent = &falseValue
+	updates = append(updates, notificationSettingsUpdate{Channels: &[]channelUpdate{
+		{ID: "bark-1", Type: "bark", Enabled: true,
+			Settings: channelSettings{"push_url": "https://api.day.app/k/", "call_alarm": false}},
+		{ID: "tg-1", Type: "telegram", Enabled: true,
+			Settings: channelSettings{"bot_token": "t", "chat_id": "c", "protect_content": false}},
+	}})
 
 	start := make(chan struct{})
 	var wait sync.WaitGroup
@@ -211,8 +256,12 @@ func TestConcurrentNotificationUpdatesPreservePartialFields(t *testing.T) {
 	}
 
 	cfg := service.configSnapshot()
+	bark, tg := channelByID(cfg, "bark-1"), channelByID(cfg, "tg-1")
+	if bark.ID == "" || tg.ID == "" {
+		t.Fatalf("channel-specific partial updates were lost: %+v", cfg.Channels)
+	}
 	if cfg.NotifySMS || !cfg.IncludeSMSBody || cfg.NotifyIncomingCall || cfg.NotifyMissedCall ||
-		cfg.IncludeCallerNumber || cfg.Bark.CallAlarm || cfg.Telegram.ProtectContent {
+		cfg.IncludeCallerNumber || bark.Settings.Bool("call_alarm") || tg.Settings.Bool("protect_content") {
 		t.Fatalf("concurrent partial updates were lost: %+v", cfg)
 	}
 	data, err := os.ReadFile(path)
@@ -223,8 +272,22 @@ func TestConcurrentNotificationUpdatesPreservePartialFields(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted != cfg {
+	if !reflect.DeepEqual(persisted, cfg) {
 		t.Fatalf("persisted config differs from memory: disk=%+v memory=%+v", persisted, cfg)
+	}
+}
+
+func TestGlobalNotificationUpdateDoesNotCreateChannels(t *testing.T) {
+	service, err := newNotificationService("", nil, newEventHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := false
+	if err := service.update(notificationSettingsUpdate{NotifySMS: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(service.configSnapshot().Channels); got != 0 {
+		t.Fatalf("global update created %d empty channels", got)
 	}
 }
 
@@ -244,20 +307,18 @@ func TestSendBarkUsesJSONPushEndpoint(t *testing.T) {
 
 	service, _ := newNotificationService("", client, newEventHub())
 	cfg := defaultNotificationConfig()
-	cfg.Bark.Enabled = true
-	cfg.Bark.BaseURL = "https://bark.test/base"
-	cfg.Bark.DeviceKey = "device-key-in-body"
+	const deviceKey = "device-key-in-body"
 	event := notificationEvent{ID: "call-1", Kind: "incoming_call", Number: "10086"}
-	if err := service.sendBark(context.Background(), cfg, event); err != nil {
+	if err := service.sendBark(context.Background(), cfg, "https://bark.test/base", deviceKey, true, event); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/base/push" {
 		t.Fatalf("Bark path = %q, want /base/push", gotPath)
 	}
-	if strings.Contains(gotPath, cfg.Bark.DeviceKey) {
+	if strings.Contains(gotPath, deviceKey) {
 		t.Fatalf("Bark key leaked into URL path: %s", gotPath)
 	}
-	if gotPayload["device_key"] != cfg.Bark.DeviceKey || gotPayload["call"] != "1" {
+	if gotPayload["device_key"] != deviceKey || gotPayload["call"] != "1" {
 		t.Fatalf("Bark payload = %#v", gotPayload)
 	}
 }
@@ -275,12 +336,8 @@ func TestSendTelegramUsesSafeJSON(t *testing.T) {
 
 	service, _ := newNotificationService("", client, newEventHub())
 	cfg := defaultNotificationConfig()
-	cfg.Telegram.Enabled = true
-	cfg.Telegram.BaseURL = "https://telegram.test/base"
-	cfg.Telegram.BotToken = "123456:token"
-	cfg.Telegram.ChatID = "@alerts"
 	event := notificationEvent{ID: "sms-1", Kind: "sms", Sender: "10000", Message: "https://example.test *code*"}
-	if err := service.sendTelegram(context.Background(), cfg, event); err != nil {
+	if err := service.sendTelegram(context.Background(), cfg, "https://telegram.test/base", "123456:token", "@alerts", true, event); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/base/bot123456:token/sendMessage" {
@@ -307,14 +364,15 @@ func TestTelegramErrorsDoNotLeakToken(t *testing.T) {
 	})}
 	service, _ := newNotificationService("", client, newEventHub())
 	cfg := defaultNotificationConfig()
-	cfg.Telegram.BaseURL = "https://telegram.test"
-	cfg.Telegram.BotToken = "secret-token"
-	cfg.Telegram.ChatID = "1"
-	err := service.sendTelegram(context.Background(), cfg, notificationEvent{ID: "test", Kind: "test"})
+	const (
+		tgBase  = "https://telegram.test"
+		tgToken = "secret-token"
+	)
+	err := service.sendTelegram(context.Background(), cfg, tgBase, tgToken, "1", false, notificationEvent{ID: "test", Kind: "test"})
 	if err == nil {
 		t.Fatal("sendTelegram() succeeded against a closed server")
 	}
-	if strings.Contains(err.Error(), cfg.Telegram.BotToken) || strings.Contains(err.Error(), cfg.Telegram.BaseURL) {
+	if strings.Contains(err.Error(), tgToken) || strings.Contains(err.Error(), tgBase) {
 		t.Fatalf("Telegram error leaked request details: %v", err)
 	}
 }
@@ -338,6 +396,33 @@ func TestValidateBaseURL(t *testing.T) {
 			_, err := validateBaseURL(tt.url)
 			if (err == nil) != tt.want {
 				t.Fatalf("validateBaseURL(%q) error = %v, want valid=%v", tt.url, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseBarkPushURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		wantBase string
+		wantKey  string
+		wantErr  bool
+	}{
+		{name: "public Bark", value: "https://api.day.app/device-key/", wantBase: "https://api.day.app", wantKey: "device-key"},
+		{name: "self hosted path", value: "https://bark.example.com/service/device-key", wantBase: "https://bark.example.com/service", wantKey: "device-key"},
+		{name: "missing key", value: "https://api.day.app/", wantErr: true},
+		{name: "query rejected", value: "https://api.day.app/device-key?secret=x", wantErr: true},
+		{name: "insecure remote", value: "http://api.day.app/device-key", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseURL, deviceKey, err := parseBarkPushURL(test.value)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("parseBarkPushURL(%q) error = %v", test.value, err)
+			}
+			if baseURL != test.wantBase || deviceKey != test.wantKey {
+				t.Fatalf("parseBarkPushURL(%q) = (%q, %q), want (%q, %q)", test.value, baseURL, deviceKey, test.wantBase, test.wantKey)
 			}
 		})
 	}

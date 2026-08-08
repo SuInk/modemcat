@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SuInk/modemcat/internal/modem"
 )
 
 const (
@@ -48,6 +52,9 @@ type parsedCall struct {
 }
 
 var clccPattern = regexp.MustCompile(`\+CLCC:\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*"([^"]*)"\s*,\s*(\d+))?`)
+var dialNumberPattern = regexp.MustCompile(`^\+?[0-9*#]{1,32}$`)
+var dtmfPattern = regexp.MustCompile(`^[0-9A-D*#]$`)
+var qpcmvPattern = regexp.MustCompile(`(?i)\+QPCMV:\s*(\d+)(?:\s*,\s*(\d+))?`)
 
 func parseCLCC(response string) []parsedCall {
 	matches := clccPattern.FindAllStringSubmatch(response, -1)
@@ -170,13 +177,17 @@ func (a *app) pollCallOnce() error {
 	if a.demo {
 		return nil
 	}
+	if a.moduleATFamily() == modem.ATFamilyAirM2M {
+		a.setCallPollStatus(nil)
+		return nil
+	}
 	if a.modem == nil && a.currentUSBDevice() == nil {
 		if !a.usbDeviceConfirmedMissing() {
-			a.setCallPollStatus(errors.New("DJI USB inventory scan was inconclusive"))
+			a.setCallPollStatus(errors.New("modem USB inventory scan was inconclusive"))
 			return nil
 		}
 		a.finishAllCalls(time.Now())
-		a.setCallPollStatus(errors.New("DJI USB device is not connected"))
+		a.setCallPollStatus(errors.New("supported modem USB device is not connected"))
 		return nil
 	}
 
@@ -557,14 +568,300 @@ func (a *app) callStatus(w http.ResponseWriter, _ *http.Request) {
 		interval = 2 * time.Second
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"active":          primary,
-		"calls":           active,
-		"history":         history,
-		"polling":         !a.demo,
-		"poll_interval_s": interval.Seconds(),
-		"last_poll":       lastPoll,
-		"last_poll_error": lastPollError,
+		"active":            primary,
+		"calls":             active,
+		"history":           history,
+		"polling":           !a.demo,
+		"poll_interval_s":   interval.Seconds(),
+		"last_poll":         lastPoll,
+		"last_poll_error":   lastPollError,
+		"control_available": a.callControlAvailable(),
 	})
+}
+
+func (a *app) callControlAvailable() bool {
+	if a.demo || a.atCommandOverride != nil || a.modem != nil {
+		if a.modem != nil && a.moduleATFamily() == modem.ATFamilyAirM2M {
+			return false
+		}
+		return true
+	}
+	if a.moduleATFamily() == modem.ATFamilyAirM2M {
+		return false
+	}
+	return a.hasUSBAT()
+}
+
+type dialCallRequest struct {
+	Number string `json:"number"`
+}
+
+func normalizeDialNumber(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.ContainsAny(raw, "\r\n\x00") {
+		return "", errors.New("invalid phone number")
+	}
+	replacer := strings.NewReplacer(" ", "", "-", "", "(", "", ")", "")
+	number := replacer.Replace(raw)
+	if !dialNumberPattern.MatchString(number) || number == "+" {
+		return "", errors.New("phone number may contain only digits, +, * and #")
+	}
+	return number, nil
+}
+
+func (a *app) dialCall(w http.ResponseWriter, r *http.Request) {
+	var request dialCallRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	number, err := normalizeDialNumber(request.Number)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if primary, active, _ := a.callSnapshot(); primary != nil || len(active) > 0 {
+		writeError(w, http.StatusConflict, "end the current call before dialing another number")
+		return
+	}
+	if a.demo {
+		a.applyCallPoll([]parsedCall{{Index: 1, Direction: "outgoing", State: "dialing", Number: number}}, time.Now())
+		writeJSON(w, http.StatusOK, map[string]bool{"dialing": true})
+		return
+	}
+	if err := a.runCallAction("ATD"+number+";", 15*time.Second); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.triggerCallPoll()
+	writeJSON(w, http.StatusOK, map[string]bool{"dialing": true})
+}
+
+func (a *app) answerCall(w http.ResponseWriter, _ *http.Request) {
+	target, otherConnected := a.answerableCall()
+	if target == nil {
+		writeError(w, http.StatusConflict, "incoming call is no longer available")
+		return
+	}
+	command := "ATA"
+	if target.State == "waiting" {
+		if !otherConnected {
+			writeError(w, http.StatusConflict, "call waiting state is inconsistent")
+			return
+		}
+		command = "AT+CHLD=2"
+	}
+	if a.demo {
+		a.setDemoCallState(target.ID, "active")
+		writeJSON(w, http.StatusOK, map[string]bool{"answered": true})
+		return
+	}
+	if err := a.runCallAction(command, 8*time.Second); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.triggerCallPoll()
+	writeJSON(w, http.StatusOK, map[string]bool{"answered": true})
+}
+
+func (a *app) answerableCall() (*callRecord, bool) {
+	a.callMu.RLock()
+	defer a.callMu.RUnlock()
+	var target *callRecord
+	otherConnected := false
+	for _, record := range a.activeCalls {
+		if record.Direction == "incoming" && (record.State == "incoming" || record.State == "waiting") {
+			copy := *record
+			if target == nil || callStatePriority(copy.State) > callStatePriority(target.State) {
+				target = &copy
+			}
+			continue
+		}
+		if record.State == "active" || record.State == "held" {
+			otherConnected = true
+		}
+	}
+	return target, otherConnected
+}
+
+func (a *app) hangupCall(w http.ResponseWriter, _ *http.Request) {
+	if primary, active, _ := a.callSnapshot(); primary == nil && len(active) == 0 {
+		writeError(w, http.StatusConflict, "there is no active call")
+		return
+	}
+	if a.demo {
+		a.applyCallPoll(nil, time.Now())
+		writeJSON(w, http.StatusOK, map[string]bool{"ended": true})
+		return
+	}
+	err := a.runCallAction("AT+CHUP", 8*time.Second)
+	if err != nil {
+		err = a.runCallAction("ATH", 5*time.Second)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	a.triggerCallPoll()
+	writeJSON(w, http.StatusOK, map[string]bool{"ended": true})
+}
+
+type callDTMFRequest struct {
+	Tone string `json:"tone"`
+}
+
+func (a *app) sendCallDTMF(w http.ResponseWriter, r *http.Request) {
+	var request callDTMFRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	tone := strings.ToUpper(strings.TrimSpace(request.Tone))
+	if !dtmfPattern.MatchString(tone) {
+		writeError(w, http.StatusBadRequest, "DTMF must be one of 0-9, *, # or A-D")
+		return
+	}
+	primary, _, _ := a.callSnapshot()
+	if primary == nil || primary.State != "active" {
+		writeError(w, http.StatusConflict, "DTMF is available only during an active call")
+		return
+	}
+	if !a.demo {
+		if err := a.runCallAction(`AT+VTS="`+tone+`"`, 5*time.Second); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"tone": tone})
+}
+
+func (a *app) runCallAction(command string, timeout time.Duration) error {
+	_, err := a.runCallCommand(command, timeout)
+	return err
+}
+
+func (a *app) runCallCommand(command string, timeout time.Duration) (string, error) {
+	if !a.demo && a.atCommandOverride == nil && a.moduleATFamily() == modem.ATFamilyAirM2M {
+		return "", errors.New("Air780 AT firmware does not expose cellular voice call control")
+	}
+	a.callPollMu.Lock()
+	defer a.callPollMu.Unlock()
+	response, err := a.runCallATCommand(command, timeout)
+	if err == nil {
+		err = atCommandResponseError(response)
+	}
+	return response, err
+}
+
+func (a *app) setDemoCallState(id, state string) {
+	a.callMu.Lock()
+	defer a.callMu.Unlock()
+	for _, record := range a.activeCalls {
+		if record.ID == id {
+			record.State = state
+			record.UpdatedAt = time.Now()
+			return
+		}
+	}
+}
+
+func (a *app) probeCallCapabilities(w http.ResponseWriter, _ *http.Request) {
+	hostUAC, hostInputs, hostOutputs := detectHostUAC()
+	result := map[string]any{
+		"control_available":     a.callControlAvailable(),
+		"audio_probe_supported": false,
+		"audio_forwarding":      false,
+		"audio_mode":            "unknown",
+		"host_uac_detected":     hostUAC,
+		"host_audio_inputs":     hostInputs,
+		"host_audio_outputs":    hostOutputs,
+		"detail":                "The module did not expose a detectable USB voice forwarding command.",
+	}
+	if a.demo {
+		result["detail"] = "Demo mode does not expose a hardware audio path."
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	if !a.callControlAvailable() {
+		result["detail"] = "Connect the DJI cellular module before probing audio support."
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	testResponse, err := a.runCallCommand("AT+QPCMV=?", 5*time.Second)
+	if err != nil || !strings.Contains(strings.ToUpper(testResponse), "+QPCMV:") {
+		result["detail"] = "AT call control may work, but this firmware does not report QPCMV/UAC voice forwarding support."
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	result["audio_probe_supported"] = true
+	result["detail"] = "QPCMV is supported. USB Audio still requires a compatible USB composition and host audio device."
+	response, err := a.runCallCommand("AT+QPCMV?", 5*time.Second)
+	if err == nil {
+		if match := qpcmvPattern.FindStringSubmatch(response); len(match) > 1 {
+			result["audio_forwarding"] = match[1] == "1"
+			if len(match) > 2 && match[2] == "2" {
+				result["audio_mode"] = "uac"
+			} else if match[1] == "1" {
+				result["audio_mode"] = "voice_forwarding"
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func detectHostUAC() (bool, []string, []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/usr/sbin/system_profiler", "SPAudioDataType", "-json").Output()
+	if err != nil {
+		return false, nil, nil
+	}
+	var payload struct {
+		Audio []struct {
+			Items []map[string]any `json:"_items"`
+		} `json:"SPAudioDataType"`
+	}
+	if json.Unmarshal(output, &payload) != nil {
+		return false, nil, nil
+	}
+	var inputs, outputs []string
+	for _, group := range payload.Audio {
+		for _, item := range group.Items {
+			manufacturer, _ := item["coreaudio_device_manufacturer"].(string)
+			transport, _ := item["coreaudio_device_transport"].(string)
+			name, _ := item["_name"].(string)
+			if !strings.EqualFold(strings.TrimSpace(manufacturer), "BAIWANG") || transport != "coreaudio_device_type_usb" {
+				continue
+			}
+			if _, ok := item["coreaudio_device_input"]; ok {
+				inputs = append(inputs, name)
+			}
+			if _, ok := item["coreaudio_device_output"]; ok {
+				outputs = append(outputs, name)
+			}
+		}
+	}
+	return len(inputs) > 0 && len(outputs) > 0, inputs, outputs
+}
+
+func (a *app) startCallAudio(w http.ResponseWriter, _ *http.Request) {
+	if a.demo {
+		writeJSON(w, http.StatusOK, map[string]bool{"enabled": true})
+		return
+	}
+	if err := a.runCallAction("AT+QPCMV=1,2", 5*time.Second); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": true})
+}
+
+func (a *app) stopCallAudio(w http.ResponseWriter, _ *http.Request) {
+	if !a.demo {
+		if err := a.runCallAction("AT+QPCMV=0", 5*time.Second); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": false})
 }
 
 type rejectCallRequest struct {
@@ -596,15 +893,9 @@ func (a *app) rejectCall(w http.ResponseWriter, r *http.Request) {
 	if target.State == "waiting" {
 		command = "AT+CHLD=0"
 	}
-	response, err := a.runCallATCommand(command, 5*time.Second)
-	if err == nil {
-		err = atCommandResponseError(response)
-	}
+	err := a.runCallAction(command, 5*time.Second)
 	if err != nil && command == "AT+CHUP" {
-		response, err = a.runCallATCommand("ATH", 3*time.Second)
-		if err == nil {
-			err = atCommandResponseError(response)
-		}
+		err = a.runCallAction("ATH", 3*time.Second)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/SuInk/djsmsforward/internal/modem"
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/internal/modem"
+	"github.com/SuInk/modemcat/pkg/logger"
 )
 
 // 后端模式常量

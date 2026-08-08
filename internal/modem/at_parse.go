@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 )
 
 func splitLines(resp string) []string {
@@ -65,7 +65,12 @@ func parseIMEI(resp string) string {
 
 func parseFirmware(resp string) string {
 	for _, line := range splitLines(resp) {
-		if line != "" && line != "OK" && !strings.HasPrefix(line, "+") {
+		upper := strings.ToUpper(line)
+		if strings.HasPrefix(upper, "+VER:") {
+			return strings.TrimSpace(line[strings.IndexByte(line, ':')+1:])
+		}
+		if line != "" && upper != "OK" && upper != "ERROR" &&
+			!strings.HasPrefix(upper, "AT+") && !strings.HasPrefix(line, "+") {
 			return line
 		}
 	}
@@ -167,7 +172,11 @@ func parseCOPSAct(resp string) (string, bool) {
 }
 
 func parseCREG(resp string) (int, string, string, bool) {
-	line, ok := findLineWithPrefix(resp, "+CREG:")
+	return parseRegistration(resp, "+CREG:")
+}
+
+func parseRegistration(resp, prefix string) (int, string, string, bool) {
+	line, ok := findLineWithPrefix(resp, prefix)
 	if !ok {
 		return 0, "", "", false
 	}
@@ -187,6 +196,33 @@ func parseCREG(resp string) (int, string, string, bool) {
 		cellID = strings.Trim(strings.TrimSpace(parts[3]), "\"")
 	}
 	return regStatus, lac, cellID, true
+}
+
+// ParseCESQLTE converts the 3GPP TS 27.007 encoded LTE quality fields to the
+// integer dB/dBm values used by DeviceStatus.
+func ParseCESQLTE(resp string) (rsrp, rsrq int, ok bool) {
+	line, found := findLineWithPrefix(resp, "+CESQ:")
+	if !found {
+		return 0, 0, false
+	}
+	parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(line, "+CESQ:")), ",")
+	if len(parts) < 6 {
+		return 0, 0, false
+	}
+	var rsrqCode, rsrpCode int
+	if _, err := fmt.Sscanf(strings.TrimSpace(parts[4]), "%d", &rsrqCode); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(strings.TrimSpace(parts[5]), "%d", &rsrpCode); err != nil {
+		return 0, 0, false
+	}
+	if rsrqCode < 1 || rsrqCode > 34 || rsrpCode < 1 || rsrpCode > 97 {
+		return 0, 0, false
+	}
+	// RSRQ uses 0.5 dB steps. Round half values toward the weaker reading.
+	rsrq = (rsrqCode - 41) / 2
+	rsrp = rsrpCode - 141
+	return rsrp, rsrq, true
 }
 
 func parseCSQ(resp string) (int, int, bool) {

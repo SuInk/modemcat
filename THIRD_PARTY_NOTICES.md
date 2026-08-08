@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-DJSMSForward contains code derived from the upstream VoHive project and retains the license and required notice provided in the repository root [`LICENSE`](LICENSE):
+ModemCat contains code derived from the upstream VoHive project and retains the license and required notice provided in the repository root [`LICENSE`](LICENSE):
 
 ```text
 Required Notice: Copyright iniwex5 (https://github.com/iniwex5/vohive)
@@ -16,7 +16,7 @@ The macOS release package includes **libusb 1.0.30**, distributed under the GNU 
 
 ## Vendored Source Dependencies
 
-The source repository includes vendored dependencies under `third_party/` so the versions used by DJSMSForward remain reproducible. Their original copyright notices and license texts are retained in the corresponding directories.
+The source repository includes vendored dependencies under `third_party/` so the versions used by ModemCat remain reproducible. Their original copyright notices and license texts are retained in the corresponding directories.
 
 | Component | License file |
 | --- | --- |

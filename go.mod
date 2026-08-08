@@ -1,4 +1,4 @@
-module github.com/SuInk/djsmsforward
+module github.com/SuInk/modemcat
 
 go 1.26.3
 

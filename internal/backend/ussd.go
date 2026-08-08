@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/modem"
+	"github.com/SuInk/modemcat/internal/modem"
 )
 
 type USSDResult struct {

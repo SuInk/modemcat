@@ -118,6 +118,23 @@ func TestParseServingCellLTEInfoIncludesRadio(t *testing.T) {
 	}
 }
 
+func TestParseCESQLTE(t *testing.T) {
+	rsrp, rsrq, ok := ParseCESQLTE("AT+CESQ\r\n+CESQ: 99,99,255,255,20,53\r\nOK")
+	if !ok || rsrp != -88 || rsrq != -10 {
+		t.Fatalf("ParseCESQLTE() = %d, %d, %v", rsrp, rsrq, ok)
+	}
+	if _, _, ok := ParseCESQLTE("+CESQ: 99,99,255,255,255,255"); ok {
+		t.Fatal("ParseCESQLTE() accepted unavailable LTE fields")
+	}
+}
+
+func TestParseFirmwareAir780VERWithEcho(t *testing.T) {
+	response := "AT+VER\r\nAirM2M_780E_V1183_LTE_LSAT\r\nOK"
+	if got := parseFirmware(response); got != "AirM2M_780E_V1183_LTE_LSAT" {
+		t.Fatalf("parseFirmware() = %q", got)
+	}
+}
+
 func TestParseQNWInfoModeAndDuplex(t *testing.T) {
 	tests := []struct {
 		name       string

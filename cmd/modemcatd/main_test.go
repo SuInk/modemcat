@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/SuInk/modemcat/internal/modem"
 )
 
 func TestPortScore(t *testing.T) {
@@ -13,6 +15,8 @@ func TestPortScore(t *testing.T) {
 		want int
 	}{
 		{name: "named Quectel port", port: "/dev/cu.Quectel-AT", want: 100},
+		{name: "named AirM2M port", port: "/dev/cu.AirM2M-AT", want: 100},
+		{name: "named EigenComm port", port: "/dev/cu.EigenComm-Modem", want: 100},
 		{name: "usb modem", port: "/dev/cu.usbmodem2101", want: 80},
 		{name: "usb serial", port: "/dev/cu.usbserial-1420", want: 60},
 		{name: "bluetooth", port: "/dev/cu.Bluetooth-Incoming-Port", want: 0},
@@ -41,6 +45,43 @@ func TestParseUSBNetMode(t *testing.T) {
 	}
 }
 
+func TestSupportedModuleUSBIDs(t *testing.T) {
+	for _, pair := range [][2]int{{0x2ca3, 0x4006}, {0x2c7c, 0x0125}, {0x19d1, 0x0001}} {
+		if !isSupportedModuleUSBID(pair[0], pair[1]) {
+			t.Fatalf("%04x:%04x should be supported", pair[0], pair[1])
+		}
+	}
+	for _, pair := range [][2]int{{0x2ca3, 0x0001}, {0x2c7c, 0x9999}, {0x1234, 0x4006}} {
+		if isSupportedModuleUSBID(pair[0], pair[1]) {
+			t.Fatalf("%04x:%04x should not be supported", pair[0], pair[1])
+		}
+	}
+}
+
+func TestAir780USBIdentityMetadata(t *testing.T) {
+	if got := moduleFamilyForUSBID(0x19d1, 0x0001); got != modem.ATFamilyAirM2M {
+		t.Fatalf("Air780 family = %q", got)
+	}
+	if got := supportedModuleFallbackVendor(0x19d1, 0x0001); got != "AirM2M" {
+		t.Fatalf("Air780 vendor = %q", got)
+	}
+	if got := supportedModuleFallbackProduct(0x19d1, 0x0001); got != "Air780" {
+		t.Fatalf("Air780 product = %q", got)
+	}
+}
+
+func TestParseAir780StatusFallbacks(t *testing.T) {
+	if got := parseUSBATICCID(`+CCID: "8986001234567890123F"`); got != "8986001234567890123" {
+		t.Fatalf("ICCID = %q", got)
+	}
+	if got := parseUSBATCOPSMode(`+COPS: 0,2,"46011",7`); got != "LTE" {
+		t.Fatalf("network mode = %q", got)
+	}
+	if got, ok := parseModuleUSBMode("mode: 2\r\nvid: 0x19d1\r\npid: 0x1\r\nOK", modem.ATFamilyAirM2M); !ok || got != 2 {
+		t.Fatalf("SETUSB mode = %d, %v", got, ok)
+	}
+}
+
 func TestParseMacHardwarePorts(t *testing.T) {
 	out := `An asterisk (*) denotes that a network service is disabled.
 
@@ -64,7 +105,7 @@ Ethernet Address: 00:11:22:33:44:55
 	}
 }
 
-func TestSelectUSBTrafficInterfaceRequiresDJIHardwarePort(t *testing.T) {
+func TestSelectUSBTrafficInterfaceRequiresSupportedModuleHardwarePort(t *testing.T) {
 	interfaces := []macNetInterface{
 		{Name: "en1", Status: "active", Kind: "ethernet", IPv4: "192.168.3.49"},
 		{Name: "en8", Status: "active", Kind: "ethernet", IPv4: "192.168.225.2"},
@@ -93,6 +134,12 @@ func TestSelectUSBTrafficInterfaceRequiresDJIHardwarePort(t *testing.T) {
 			want:  "en8",
 		},
 		{
+			name:  "AirM2M ECM hardware port is selected",
+			route: macDefaultRoute{Interface: "en8"},
+			ports: []macHardwarePort{{Name: "AirM2M Air780 ECM", Device: "en8"}},
+			want:  "en8",
+		},
+		{
 			name:  "unrelated USB Ethernet is rejected",
 			route: macDefaultRoute{Interface: "en8"},
 			ports: []macHardwarePort{{Name: "USB 10/100/1000 LAN", Device: "en8"}},
@@ -104,6 +151,13 @@ func TestSelectUSBTrafficInterfaceRequiresDJIHardwarePort(t *testing.T) {
 				t.Fatalf("selectUSBTrafficInterface() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseUSBATFirmwarePrefersAirM2MVersion(t *testing.T) {
+	response := "AirM2M\r\nAir780E\r\nAirM2M_780E_V1183_LTE_LSAT\r\nOK"
+	if got := parseUSBATFirmware(response); got != "AirM2M_780E_V1183_LTE_LSAT" {
+		t.Fatalf("parseUSBATFirmware() = %q", got)
 	}
 }
 
@@ -175,8 +229,8 @@ func TestSameOriginMutation(t *testing.T) {
 		{name: "cross origin", host: "127.0.0.1:7575", origin: "https://example.com", want: false},
 		{name: "cross site form", host: "127.0.0.1:7575", fetchSite: "cross-site", want: false},
 		{name: "DNS rebinding host", host: "evil.test:7575", origin: "http://evil.test:7575", fetchSite: "same-origin", want: false},
-		{name: "Cloudflare HTTPS origin", host: "djsmsforward.example.com", origin: "https://djsmsforward.example.com", fetchSite: "same-origin", public: "https://djsmsforward.example.com", want: true},
-		{name: "Cloudflare HTTP downgrade", host: "djsmsforward.example.com", origin: "http://djsmsforward.example.com", fetchSite: "same-origin", public: "https://djsmsforward.example.com", want: false},
+		{name: "Cloudflare HTTPS origin", host: "modemcat.example.com", origin: "https://modemcat.example.com", fetchSite: "same-origin", public: "https://modemcat.example.com", want: true},
+		{name: "Cloudflare HTTP downgrade", host: "modemcat.example.com", origin: "http://modemcat.example.com", fetchSite: "same-origin", public: "https://modemcat.example.com", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,12 +250,12 @@ func TestSameOriginMutation(t *testing.T) {
 }
 
 func TestValidatePublicOrigin(t *testing.T) {
-	for _, value := range []string{"", "https://djsmsforward.example.com", "https://djsmsforward.example.com:8443"} {
+	for _, value := range []string{"", "https://modemcat.example.com", "https://modemcat.example.com:8443"} {
 		if _, err := validatePublicOrigin(value); err != nil {
 			t.Errorf("validatePublicOrigin(%q) = %v", value, err)
 		}
 	}
-	for _, value := range []string{"http://djsmsforward.example.com", "https://127.0.0.1", "https://localhost", "https://user@example.com", "https://example.com/path", "https://example.com?q=1"} {
+	for _, value := range []string{"http://modemcat.example.com", "https://127.0.0.1", "https://localhost", "https://user@example.com", "https://example.com/path", "https://example.com?q=1"} {
 		if _, err := validatePublicOrigin(value); err == nil {
 			t.Errorf("validatePublicOrigin(%q) unexpectedly succeeded", value)
 		}
@@ -256,8 +310,8 @@ func TestSecurityHeadersRejectUnsafeRequests(t *testing.T) {
 		{name: "rebinding GET", method: http.MethodGet, host: "evil.test:7575", want: http.StatusForbidden},
 		{name: "same-origin JSON", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "application/json", want: http.StatusNoContent},
 		{name: "simple form", method: http.MethodPost, host: "127.0.0.1:7575", origin: "http://127.0.0.1:7575", contentType: "text/plain", want: http.StatusForbidden},
-		{name: "allowed Cloudflare host", method: http.MethodGet, host: "djsmsforward.example.com", public: "https://djsmsforward.example.com", want: http.StatusNoContent},
-		{name: "unconfigured public host", method: http.MethodGet, host: "djsmsforward.example.com", want: http.StatusForbidden},
+		{name: "allowed Cloudflare host", method: http.MethodGet, host: "modemcat.example.com", public: "https://modemcat.example.com", want: http.StatusNoContent},
+		{name: "unconfigured public host", method: http.MethodGet, host: "modemcat.example.com", want: http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

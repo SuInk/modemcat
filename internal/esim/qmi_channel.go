@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/mbim"
 	qmiq "github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 )
 

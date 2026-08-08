@@ -36,30 +36,29 @@ type notificationEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type barkNotificationConfig struct {
-	Enabled   bool   `json:"enabled"`
-	BaseURL   string `json:"base_url"`
-	DeviceKey string `json:"device_key"`
-	CallAlarm bool   `json:"call_alarm"`
-}
-
-type telegramNotificationConfig struct {
-	Enabled        bool   `json:"enabled"`
-	BaseURL        string `json:"base_url"`
-	BotToken       string `json:"bot_token"`
-	ChatID         string `json:"chat_id"`
-	ProtectContent bool   `json:"protect_content"`
-}
-
 type notificationConfig struct {
-	Version             int                        `json:"version"`
-	NotifySMS           bool                       `json:"notify_sms"`
-	IncludeSMSBody      bool                       `json:"include_sms_body"`
-	NotifyIncomingCall  bool                       `json:"notify_incoming_call"`
-	NotifyMissedCall    bool                       `json:"notify_missed_call"`
-	IncludeCallerNumber bool                       `json:"include_caller_number"`
-	Bark                barkNotificationConfig     `json:"bark"`
-	Telegram            telegramNotificationConfig `json:"telegram"`
+	Version             int               `json:"version"`
+	NotifySMS           bool              `json:"notify_sms"`
+	IncludeSMSBody      bool              `json:"include_sms_body"`
+	NotifyIncomingCall  bool              `json:"notify_incoming_call"`
+	NotifyMissedCall    bool              `json:"notify_missed_call"`
+	IncludeCallerNumber bool              `json:"include_caller_number"`
+	Channels            []channelInstance `json:"channels"`
+}
+
+// enabledChannels 返回某一类型下所有启用且必填齐全的实例。
+func enabledChannels(cfg notificationConfig, kind string) []channelInstance {
+	n := notifierFor(kind)
+	if n == nil {
+		return nil
+	}
+	var out []channelInstance
+	for _, ch := range cfg.Channels {
+		if ch.Type == kind && ch.Enabled && channelReady(n, ch.Settings) {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 
 type channelDeliveryStatus struct {
@@ -68,50 +67,52 @@ type channelDeliveryStatus struct {
 	LastError   string    `json:"last_error,omitempty"`
 }
 
+// channelTypeInfo 让前端能通用地渲染任意渠道的配置表单，不必为每种渠道写一段界面。
+type channelTypeInfo struct {
+	Type   string         `json:"type"`
+	Label  string         `json:"label"`
+	Fields []channelField `json:"fields"`
+}
+
+// channelView 是单条渠道对外的样子，settings 里的密文字段已替换成 xxx_configured。
+type channelView struct {
+	ID       string                `json:"id"`
+	Type     string                `json:"type"`
+	Name     string                `json:"name"`
+	Enabled  bool                  `json:"enabled"`
+	Settings channelSettings       `json:"settings"`
+	Delivery channelDeliveryStatus `json:"delivery"`
+}
+
 type notificationSettingsResponse struct {
-	NotifySMS           bool `json:"notify_sms"`
-	IncludeSMSBody      bool `json:"include_sms_body"`
-	NotifyIncomingCall  bool `json:"notify_incoming_call"`
-	NotifyMissedCall    bool `json:"notify_missed_call"`
-	IncludeCallerNumber bool `json:"include_caller_number"`
-	Bark                struct {
-		Enabled             bool                  `json:"enabled"`
-		BaseURL             string                `json:"base_url"`
-		DeviceKeyConfigured bool                  `json:"device_key_configured"`
-		CallAlarm           bool                  `json:"call_alarm"`
-		Delivery            channelDeliveryStatus `json:"delivery"`
-	} `json:"bark"`
-	Telegram struct {
-		Enabled            bool                  `json:"enabled"`
-		BaseURL            string                `json:"base_url"`
-		BotTokenConfigured bool                  `json:"bot_token_configured"`
-		ChatID             string                `json:"chat_id"`
-		ProtectContent     bool                  `json:"protect_content"`
-		Delivery           channelDeliveryStatus `json:"delivery"`
-	} `json:"telegram"`
+	NotifySMS           bool              `json:"notify_sms"`
+	IncludeSMSBody      bool              `json:"include_sms_body"`
+	NotifyIncomingCall  bool              `json:"notify_incoming_call"`
+	NotifyMissedCall    bool              `json:"notify_missed_call"`
+	IncludeCallerNumber bool              `json:"include_caller_number"`
+	ChannelTypes        []channelTypeInfo `json:"channel_types"`
+	Channels            []channelView     `json:"channels"`
+}
+
+// channelUpdate 是提交上来的单条渠道。
+//
+// Settings 里密文字段的语义：键不存在＝保持原值（前端拿不到明文，不该被迫回传）；
+// 键存在且为空串＝清除；键存在且非空＝替换。
+type channelUpdate struct {
+	ID       string          `json:"id"`
+	Type     string          `json:"type"`
+	Name     string          `json:"name"`
+	Enabled  bool            `json:"enabled"`
+	Settings channelSettings `json:"settings"`
 }
 
 type notificationSettingsUpdate struct {
-	NotifySMS           *bool `json:"notify_sms"`
-	IncludeSMSBody      *bool `json:"include_sms_body"`
-	NotifyIncomingCall  *bool `json:"notify_incoming_call"`
-	NotifyMissedCall    *bool `json:"notify_missed_call"`
-	IncludeCallerNumber *bool `json:"include_caller_number"`
-	Bark                struct {
-		Enabled        *bool   `json:"enabled"`
-		BaseURL        *string `json:"base_url"`
-		DeviceKey      *string `json:"device_key"`
-		ClearDeviceKey bool    `json:"clear_device_key"`
-		CallAlarm      *bool   `json:"call_alarm"`
-	} `json:"bark"`
-	Telegram struct {
-		Enabled        *bool   `json:"enabled"`
-		BaseURL        *string `json:"base_url"`
-		BotToken       *string `json:"bot_token"`
-		ClearBotToken  bool    `json:"clear_bot_token"`
-		ChatID         *string `json:"chat_id"`
-		ProtectContent *bool   `json:"protect_content"`
-	} `json:"telegram"`
+	NotifySMS           *bool            `json:"notify_sms"`
+	IncludeSMSBody      *bool            `json:"include_sms_body"`
+	NotifyIncomingCall  *bool            `json:"notify_incoming_call"`
+	NotifyMissedCall    *bool            `json:"notify_missed_call"`
+	IncludeCallerNumber *bool            `json:"include_caller_number"`
+	Channels            *[]channelUpdate `json:"channels"`
 }
 
 type queuedNotification struct {
@@ -127,16 +128,14 @@ type notificationService struct {
 	configPath       string
 	client           *http.Client
 
-	barkQueue     chan queuedNotification
-	telegramQueue chan queuedNotification
-	startOnce     sync.Once
+	queues    map[string]chan queuedNotification
+	startOnce sync.Once
 
 	dedupeMu sync.Mutex
 	seen     map[string]time.Time
 
-	statusMu       sync.RWMutex
-	barkStatus     channelDeliveryStatus
-	telegramStatus channelDeliveryStatus
+	statusMu sync.RWMutex
+	statuses map[string]channelDeliveryStatus
 
 	hub *eventHub
 }
@@ -171,14 +170,6 @@ func defaultNotificationConfig() notificationConfig {
 		NotifyIncomingCall:  true,
 		NotifyMissedCall:    true,
 		IncludeCallerNumber: true,
-		Bark: barkNotificationConfig{
-			BaseURL:   "https://api.day.app",
-			CallAlarm: true,
-		},
-		Telegram: telegramNotificationConfig{
-			BaseURL:        "https://api.telegram.org",
-			ProtectContent: true,
-		},
 	}
 }
 
@@ -187,7 +178,7 @@ func notificationConfigFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJSMSForward", "notifications.json"), nil
+	return filepath.Join(dir, "ModemCat", "notifications.json"), nil
 }
 
 func newNotificationService(path string, client *http.Client, hub *eventHub) (*notificationService, error) {
@@ -204,10 +195,13 @@ func newNotificationService(path string, client *http.Client, hub *eventHub) (*n
 		configGeneration: 1,
 		configPath:       path,
 		client:           client,
-		barkQueue:        make(chan queuedNotification, notificationQueueSize),
-		telegramQueue:    make(chan queuedNotification, notificationQueueSize),
+		queues:           make(map[string]chan queuedNotification, len(notifiers)),
+		statuses:         make(map[string]channelDeliveryStatus, len(notifiers)),
 		seen:             make(map[string]time.Time),
 		hub:              hub,
+	}
+	for _, n := range notifiers {
+		service.queues[n.Type()] = make(chan queuedNotification, notificationQueueSize)
 	}
 	if strings.TrimSpace(path) == "" {
 		return service, nil
@@ -239,11 +233,19 @@ func newNotificationService(path string, client *http.Client, hub *eventHub) (*n
 	if loaded.Version == 0 {
 		loaded.Version = 1
 	}
-	if strings.TrimSpace(loaded.Bark.BaseURL) == "" {
-		loaded.Bark.BaseURL = "https://api.day.app"
+	// 补齐缺失的实例 ID 并落盘，保证后续按 ID 记录投递状态时有稳定键。
+	normalized := false
+	for i := range loaded.Channels {
+		if strings.TrimSpace(loaded.Channels[i].ID) == "" {
+			loaded.Channels[i].ID = newChannelID()
+			normalized = true
+		}
 	}
-	if strings.TrimSpace(loaded.Telegram.BaseURL) == "" {
-		loaded.Telegram.BaseURL = "https://api.telegram.org"
+	if normalized {
+		if err := persistNotificationConfig(path, loaded); err != nil {
+			return service, fmt.Errorf("normalize notification settings: %w", err)
+		}
+		log.Printf("notification settings normalized (%d channels)", len(loaded.Channels))
 	}
 	if err := validateNotificationConfig(loaded); err != nil {
 		return service, fmt.Errorf("validate notification settings: %w", err)
@@ -287,8 +289,9 @@ func (s *notificationService) start(ctx context.Context) {
 		return
 	}
 	s.startOnce.Do(func() {
-		go s.runBarkWorker(ctx)
-		go s.runTelegramWorker(ctx)
+		for _, n := range notifiers {
+			go s.runWorker(ctx, n)
+		}
 	})
 }
 
@@ -303,18 +306,18 @@ func (s *notificationService) submit(event notificationEvent) {
 	if s.hub != nil {
 		s.hub.publish(event)
 	}
-	if cfg.Bark.Enabled && cfg.Bark.DeviceKey != "" {
-		select {
-		case s.barkQueue <- queuedNotification{Event: event, Generation: generation}:
-		default:
-			log.Printf("Bark notification queue is full; dropped event %s", event.ID)
+	for _, n := range notifiers {
+		if len(enabledChannels(cfg, n.Type())) == 0 {
+			continue
 		}
-	}
-	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+		queue := s.queues[n.Type()]
+		if queue == nil {
+			continue
+		}
 		select {
-		case s.telegramQueue <- queuedNotification{Event: event, Generation: generation}:
+		case queue <- queuedNotification{Event: event, Generation: generation}:
 		default:
-			log.Printf("Telegram notification queue is full; dropped event %s", event.ID)
+			log.Printf("%s notification queue is full; dropped event %s", n.Label(), event.ID)
 		}
 	}
 }
@@ -360,7 +363,20 @@ func (s *notificationService) configSnapshot() notificationConfig {
 func (s *notificationService) configSnapshotWithGeneration() (notificationConfig, uint64) {
 	s.configMu.RLock()
 	defer s.configMu.RUnlock()
-	return s.config, s.configGeneration
+	return cloneNotificationConfig(s.config), s.configGeneration
+}
+
+func cloneNotificationConfig(cfg notificationConfig) notificationConfig {
+	clone := cfg
+	clone.Channels = make([]channelInstance, len(cfg.Channels))
+	for i, channel := range cfg.Channels {
+		clone.Channels[i] = channel
+		clone.Channels[i].Settings = make(channelSettings, len(channel.Settings))
+		for key, value := range channel.Settings {
+			clone.Channels[i].Settings[key] = value
+		}
+	}
+	return clone
 }
 
 func (s *notificationService) deliveryConfig(item queuedNotification) (notificationConfig, bool) {
@@ -368,56 +384,45 @@ func (s *notificationService) deliveryConfig(item queuedNotification) (notificat
 	return cfg, generation == item.Generation
 }
 
-func (s *notificationService) runBarkWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case item := <-s.barkQueue:
-			cfg, current := s.deliveryConfig(item)
-			if !current {
-				continue
-			}
-			if !cfg.Bark.Enabled || cfg.Bark.DeviceKey == "" {
-				continue
-			}
-			err := s.sendBark(ctx, cfg, item.Event)
-			s.recordDelivery("bark", err)
-			if err != nil {
-				log.Printf("Bark notification failed for event %s: %v", item.Event.ID, err)
-			}
-		}
+// runWorker 是所有渠道共用的投递循环。
+//
+// deliveryConfig 丢弃配置变更前入队的事件——用户刚关掉某个渠道或改了地址时，不该再
+// 按旧配置投递。同一类型下的多个实例串行投递，共用该类型的限流间隔。
+func (s *notificationService) runWorker(ctx context.Context, n Notifier) {
+	queue := s.queues[n.Type()]
+	if queue == nil {
+		return
 	}
-}
-
-func (s *notificationService) runTelegramWorker(ctx context.Context) {
+	gap := minInterval(n)
 	var lastAttempt time.Time
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case item := <-s.telegramQueue:
-			if delay := time.Until(lastAttempt.Add(time.Second)); delay > 0 {
-				timer := time.NewTimer(delay)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return
-				case <-timer.C:
-				}
-			}
+		case item := <-queue:
 			cfg, current := s.deliveryConfig(item)
 			if !current {
 				continue
 			}
-			if !cfg.Telegram.Enabled || cfg.Telegram.BotToken == "" || cfg.Telegram.ChatID == "" {
-				continue
-			}
-			lastAttempt = time.Now()
-			err := s.sendTelegram(ctx, cfg, item.Event)
-			s.recordDelivery("telegram", err)
-			if err != nil {
-				log.Printf("Telegram notification failed for event %s: %v", item.Event.ID, err)
+			for _, ch := range enabledChannels(cfg, n.Type()) {
+				if gap > 0 {
+					if delay := time.Until(lastAttempt.Add(gap)); delay > 0 {
+						timer := time.NewTimer(delay)
+						select {
+						case <-ctx.Done():
+							timer.Stop()
+							return
+						case <-timer.C:
+						}
+					}
+				}
+				lastAttempt = time.Now()
+				err := n.Send(ctx, s, cfg, ch.Settings, item.Event)
+				s.recordDelivery(ch.ID, err)
+				if err != nil {
+					log.Printf("%s(%s) notification failed for event %s: %v", n.Label(), ch.Name, item.Event.ID, err)
+				}
 			}
 		}
 	}
@@ -427,41 +432,43 @@ func (s *notificationService) recordDelivery(channel string, err error) {
 	now := time.Now()
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
-	status := &s.barkStatus
-	if channel == "telegram" {
-		status = &s.telegramStatus
-	}
+	status := s.statuses[channel]
 	status.LastAttempt = now
 	if err != nil {
 		status.LastError = err.Error()
-		return
+	} else {
+		status.LastSuccess = now
+		status.LastError = ""
 	}
-	status.LastSuccess = now
-	status.LastError = ""
+	s.statuses[channel] = status
 }
 
-func (s *notificationService) statusSnapshot() (channelDeliveryStatus, channelDeliveryStatus) {
+func (s *notificationService) statusSnapshot() map[string]channelDeliveryStatus {
 	s.statusMu.RLock()
 	defer s.statusMu.RUnlock()
-	return s.barkStatus, s.telegramStatus
+	out := make(map[string]channelDeliveryStatus, len(s.statuses))
+	for k, v := range s.statuses {
+		out[k] = v
+	}
+	return out
 }
 
-func (s *notificationService) sendBark(ctx context.Context, cfg notificationConfig, event notificationEvent) error {
-	endpoint, err := appendURLPath(cfg.Bark.BaseURL, "push")
+func (s *notificationService) sendBark(ctx context.Context, cfg notificationConfig, baseURL, deviceKey string, callAlarm bool, event notificationEvent) error {
+	endpoint, err := appendURLPath(baseURL, "push")
 	if err != nil {
 		return errors.New("invalid Bark server URL")
 	}
 	title, body := renderExternalEvent(cfg, event)
 	payload := map[string]any{
-		"device_key": cfg.Bark.DeviceKey,
+		"device_key": deviceKey,
 		"title":      title,
 		"body":       body,
-		"group":      "DJSMSForward",
+		"group":      "ModemCat",
 		"id":         shortHash(event.ID),
 	}
 	if event.Kind == "incoming_call" {
 		payload["level"] = "timeSensitive"
-		if cfg.Bark.CallAlarm {
+		if callAlarm {
 			payload["call"] = "1"
 		}
 	}
@@ -494,17 +501,17 @@ func (s *notificationService) sendBark(ctx context.Context, cfg notificationConf
 	return nil
 }
 
-func (s *notificationService) sendTelegram(ctx context.Context, cfg notificationConfig, event notificationEvent) error {
-	endpoint, err := appendURLPath(cfg.Telegram.BaseURL, "bot"+cfg.Telegram.BotToken, "sendMessage")
+func (s *notificationService) sendTelegram(ctx context.Context, cfg notificationConfig, baseURL, botToken, chatID string, protectContent bool, event notificationEvent) error {
+	endpoint, err := appendURLPath(baseURL, "bot"+botToken, "sendMessage")
 	if err != nil {
 		return errors.New("invalid Telegram server URL")
 	}
 	title, body := renderExternalEvent(cfg, event)
 	text := truncateRunes(title+"\n"+body, 4096)
 	payload := map[string]any{
-		"chat_id":         cfg.Telegram.ChatID,
+		"chat_id":         chatID,
 		"text":            text,
-		"protect_content": cfg.Telegram.ProtectContent,
+		"protect_content": protectContent,
 		"link_preview_options": map[string]bool{
 			"is_disabled": true,
 		},
@@ -545,17 +552,17 @@ func renderExternalEvent(cfg notificationConfig, event notificationEvent) (strin
 		if cfg.IncludeSMSBody && strings.TrimSpace(event.Message) != "" {
 			body += "\n" + event.Message
 		}
-		return "DJSMSForward 新短信", body
+		return "ModemCat 新短信", body
 	case "incoming_call":
 		if cfg.IncludeCallerNumber {
-			return "DJSMSForward 来电", "号码：" + valueOrUnknown(event.Number)
+			return "ModemCat 来电", "号码：" + valueOrUnknown(event.Number)
 		}
-		return "DJSMSForward 来电", "检测到新的来电"
+		return "ModemCat 来电", "检测到新的来电"
 	case "missed_call":
 		if cfg.IncludeCallerNumber {
-			return "DJSMSForward 未接来电", "号码：" + valueOrUnknown(event.Number)
+			return "ModemCat 未接来电", "号码：" + valueOrUnknown(event.Number)
 		}
-		return "DJSMSForward 未接来电", "有一个未接来电"
+		return "ModemCat 未接来电", "有一个未接来电"
 	default:
 		return event.Title, event.Body
 	}
@@ -578,7 +585,7 @@ func newJSONRequest(ctx context.Context, endpoint string, payload any) (*http.Re
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "DJSMSForward/notifications")
+	request.Header.Set("User-Agent", "ModemCat/notifications")
 	return request, nil
 }
 
@@ -620,27 +627,84 @@ func validateBaseURL(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
+// parseBarkPushURL accepts Bark's complete push URL and splits its final path
+// segment (the Device Key) from an optional self-hosted server base path.
+func parseBarkPushURL(raw string) (string, string, error) {
+	normalized, err := validateBaseURL(raw)
+	if err != nil {
+		return "", "", errors.New("Bark 推送地址无效")
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return "", "", errors.New("Bark 推送地址无效")
+	}
+	escapedPath := strings.Trim(parsed.EscapedPath(), "/")
+	if escapedPath == "" {
+		return "", "", errors.New("Bark 推送地址缺少 Device Key")
+	}
+	segments := strings.Split(escapedPath, "/")
+	deviceKey, err := url.PathUnescape(segments[len(segments)-1])
+	if err != nil || strings.TrimSpace(deviceKey) == "" || len(deviceKey) > 512 ||
+		strings.ContainsAny(deviceKey, "/\r\n\x00") {
+		return "", "", errors.New("Bark 推送地址中的 Device Key 无效")
+	}
+
+	base := *parsed
+	base.Path = ""
+	base.RawPath = ""
+	if len(segments) > 1 {
+		prefix := strings.Join(segments[:len(segments)-1], "/")
+		decodedPrefix, decodeErr := url.PathUnescape(prefix)
+		if decodeErr != nil {
+			return "", "", errors.New("Bark 推送地址无效")
+		}
+		base.Path = "/" + decodedPrefix
+		base.RawPath = "/" + prefix
+	}
+	baseURL, err := validateBaseURL(base.String())
+	if err != nil {
+		return "", "", errors.New("Bark 推送地址无效")
+	}
+	return baseURL, deviceKey, nil
+}
+
+// validateNotificationConfig 校验渠道列表。
+//
+// 逐项规则由各渠道的 Fields 声明驱动，这里只补三条通用约束：类型必须已注册、ID 不重复、
+// 启用的实例必须配置完整——否则每来一条事件都会失败一次。
 func validateNotificationConfig(cfg notificationConfig) error {
-	if _, err := validateBaseURL(cfg.Bark.BaseURL); err != nil {
-		return fmt.Errorf("invalid Bark server URL: %w", err)
-	}
-	if _, err := validateBaseURL(cfg.Telegram.BaseURL); err != nil {
-		return fmt.Errorf("invalid Telegram server URL: %w", err)
-	}
-	if len(cfg.Bark.DeviceKey) > 512 || strings.ContainsAny(cfg.Bark.DeviceKey, "\r\n\x00") {
-		return errors.New("Bark device key is invalid")
-	}
-	if len(cfg.Telegram.BotToken) > 512 || strings.ContainsAny(cfg.Telegram.BotToken, "\r\n\x00") {
-		return errors.New("Telegram bot token is invalid")
-	}
-	if len(cfg.Telegram.ChatID) > 256 || strings.ContainsAny(cfg.Telegram.ChatID, "\r\n\x00") {
-		return errors.New("Telegram chat ID is invalid")
-	}
-	if cfg.Bark.Enabled && strings.TrimSpace(cfg.Bark.DeviceKey) == "" {
-		return errors.New("enable Bark after configuring a device key")
-	}
-	if cfg.Telegram.Enabled && (strings.TrimSpace(cfg.Telegram.BotToken) == "" || strings.TrimSpace(cfg.Telegram.ChatID) == "") {
-		return errors.New("enable Telegram after configuring a bot token and chat ID")
+	seen := map[string]bool{}
+	for _, ch := range cfg.Channels {
+		n := notifierFor(ch.Type)
+		if n == nil {
+			return fmt.Errorf("未知的通知渠道类型 %q", ch.Type)
+		}
+		if ch.ID != "" {
+			if seen[ch.ID] {
+				return fmt.Errorf("通知渠道 ID 重复：%s", ch.ID)
+			}
+			seen[ch.ID] = true
+		}
+		for _, f := range n.Fields() {
+			value := ch.Settings.String(f.Name)
+			if len(value) > 512 || strings.ContainsAny(value, "\r\n\x00") {
+				return fmt.Errorf("%s：%s 内容非法", n.Label(), f.Label)
+			}
+			if f.Kind == fieldURL && value != "" {
+				var err error
+				if ch.Type == "bark" && f.Name == "push_url" {
+					_, _, err = parseBarkPushURL(value)
+				} else {
+					_, err = validateBaseURL(value)
+				}
+				if err != nil {
+					return fmt.Errorf("%s：%s不是合法地址", n.Label(), f.Label)
+				}
+			}
+		}
+		if ch.Enabled && !channelReady(n, ch.Settings) {
+			return fmt.Errorf("请先填完 %s 的必填项再启用", n.Label())
+		}
 	}
 	return nil
 }
@@ -707,37 +771,16 @@ func (s *notificationService) update(update notificationSettingsUpdate) error {
 	if update.IncludeCallerNumber != nil {
 		cfg.IncludeCallerNumber = *update.IncludeCallerNumber
 	}
-	if update.Bark.Enabled != nil {
-		cfg.Bark.Enabled = *update.Bark.Enabled
+	// 只在本次请求确实携带了该渠道的字段时才建实例，否则改个全局开关也会凭空
+	// 冒出两条空渠道记录。
+	if update.Channels != nil {
+		next, err := mergeChannels(cfg.Channels, *update.Channels)
+		if err != nil {
+			return err
+		}
+		cfg.Channels = next
 	}
-	if update.Bark.BaseURL != nil && strings.TrimSpace(*update.Bark.BaseURL) != "" {
-		cfg.Bark.BaseURL = strings.TrimSpace(*update.Bark.BaseURL)
-	}
-	if update.Bark.ClearDeviceKey {
-		cfg.Bark.DeviceKey = ""
-	} else if update.Bark.DeviceKey != nil && strings.TrimSpace(*update.Bark.DeviceKey) != "" {
-		cfg.Bark.DeviceKey = strings.TrimSpace(*update.Bark.DeviceKey)
-	}
-	if update.Bark.CallAlarm != nil {
-		cfg.Bark.CallAlarm = *update.Bark.CallAlarm
-	}
-	if update.Telegram.Enabled != nil {
-		cfg.Telegram.Enabled = *update.Telegram.Enabled
-	}
-	if update.Telegram.BaseURL != nil && strings.TrimSpace(*update.Telegram.BaseURL) != "" {
-		cfg.Telegram.BaseURL = strings.TrimSpace(*update.Telegram.BaseURL)
-	}
-	if update.Telegram.ClearBotToken {
-		cfg.Telegram.BotToken = ""
-	} else if update.Telegram.BotToken != nil && strings.TrimSpace(*update.Telegram.BotToken) != "" {
-		cfg.Telegram.BotToken = strings.TrimSpace(*update.Telegram.BotToken)
-	}
-	if update.Telegram.ChatID != nil {
-		cfg.Telegram.ChatID = strings.TrimSpace(*update.Telegram.ChatID)
-	}
-	if update.Telegram.ProtectContent != nil {
-		cfg.Telegram.ProtectContent = *update.Telegram.ProtectContent
-	}
+
 	if err := validateNotificationConfig(cfg); err != nil {
 		return err
 	}
@@ -751,26 +794,86 @@ func (s *notificationService) update(update notificationSettingsUpdate) error {
 	return nil
 }
 
+// mergeChannels 用提交上来的列表替换现有渠道。
+//
+// 密文字段的处理是关键：前端从来拿不到明文，所以它提交时不会带上这些键。此时必须沿用
+// 原实例的值，否则用户改一下备注名就会把 Bot Token 清空。显式传空串才是清除。
+func mergeChannels(current []channelInstance, incoming []channelUpdate) ([]channelInstance, error) {
+	byID := make(map[string]channelInstance, len(current))
+	for _, ch := range current {
+		byID[ch.ID] = ch
+	}
+
+	out := make([]channelInstance, 0, len(incoming))
+	for _, in := range incoming {
+		n := notifierFor(in.Type)
+		if n == nil {
+			return nil, fmt.Errorf("未知的通知渠道类型 %q", in.Type)
+		}
+		merged := channelInstance{
+			ID:       strings.TrimSpace(in.ID),
+			Type:     in.Type,
+			Name:     strings.TrimSpace(in.Name),
+			Enabled:  in.Enabled,
+			Settings: channelSettings{},
+		}
+		if merged.ID == "" {
+			merged.ID = newChannelID()
+		}
+		if merged.Name == "" {
+			merged.Name = n.Label()
+		}
+		previous := byID[merged.ID].Settings
+		for _, f := range n.Fields() {
+			value, present := in.Settings[f.Name]
+			switch {
+			case f.Secret && !present:
+				merged.Settings[f.Name] = previous.String(f.Name)
+			case f.Kind == fieldBool:
+				b, _ := value.(bool)
+				merged.Settings[f.Name] = b
+			default:
+				str, _ := value.(string)
+				merged.Settings[f.Name] = strings.TrimSpace(str)
+			}
+		}
+		if err := validateChannelSettings(n, merged.Settings); merged.Enabled && err != nil {
+			return nil, err
+		}
+		out = append(out, merged)
+	}
+	return out, nil
+}
+
 func (s *notificationService) publicSettings() notificationSettingsResponse {
 	cfg := s.configSnapshot()
-	barkStatus, telegramStatus := s.statusSnapshot()
-	var response notificationSettingsResponse
-	response.NotifySMS = cfg.NotifySMS
-	response.IncludeSMSBody = cfg.IncludeSMSBody
-	response.NotifyIncomingCall = cfg.NotifyIncomingCall
-	response.NotifyMissedCall = cfg.NotifyMissedCall
-	response.IncludeCallerNumber = cfg.IncludeCallerNumber
-	response.Bark.Enabled = cfg.Bark.Enabled
-	response.Bark.BaseURL = cfg.Bark.BaseURL
-	response.Bark.DeviceKeyConfigured = cfg.Bark.DeviceKey != ""
-	response.Bark.CallAlarm = cfg.Bark.CallAlarm
-	response.Bark.Delivery = barkStatus
-	response.Telegram.Enabled = cfg.Telegram.Enabled
-	response.Telegram.BaseURL = cfg.Telegram.BaseURL
-	response.Telegram.BotTokenConfigured = cfg.Telegram.BotToken != ""
-	response.Telegram.ChatID = cfg.Telegram.ChatID
-	response.Telegram.ProtectContent = cfg.Telegram.ProtectContent
-	response.Telegram.Delivery = telegramStatus
+	statuses := s.statusSnapshot()
+
+	response := notificationSettingsResponse{
+		NotifySMS:           cfg.NotifySMS,
+		IncludeSMSBody:      cfg.IncludeSMSBody,
+		NotifyIncomingCall:  cfg.NotifyIncomingCall,
+		NotifyMissedCall:    cfg.NotifyMissedCall,
+		IncludeCallerNumber: cfg.IncludeCallerNumber,
+		ChannelTypes:        make([]channelTypeInfo, 0, len(notifiers)),
+		Channels:            make([]channelView, 0, len(cfg.Channels)),
+	}
+	for _, n := range notifiers {
+		response.ChannelTypes = append(response.ChannelTypes, channelTypeInfo{
+			Type: n.Type(), Label: n.Label(), Fields: n.Fields(),
+		})
+	}
+	for _, ch := range cfg.Channels {
+		n := notifierFor(ch.Type)
+		if n == nil {
+			continue
+		}
+		response.Channels = append(response.Channels, channelView{
+			ID: ch.ID, Type: ch.Type, Name: ch.Name, Enabled: ch.Enabled,
+			Settings: redactChannelSettings(n, ch.Settings),
+			Delivery: statuses[ch.ID],
+		})
+	}
 	return response
 }
 
@@ -808,27 +911,22 @@ func (a *app) testNotifications(w http.ResponseWriter, r *http.Request) {
 	testEvent := notificationEvent{
 		ID:        "test-" + shortHash(time.Now().Format(time.RFC3339Nano)),
 		Kind:      "test",
-		Title:     "DJSMSForward 测试提醒",
+		Title:     "ModemCat 测试提醒",
 		Body:      "Bark / Telegram 通知通道工作正常",
 		CreatedAt: time.Now(),
 	}
+	// 逐个已启用实例发一条，结果按实例 ID 返回——同类型可能配了多条，
+	// 只报「telegram 失败」说不清是哪一条。
 	results := make(map[string]string)
-	if cfg.Bark.Enabled && cfg.Bark.DeviceKey != "" {
-		err := a.notifications.sendBark(r.Context(), cfg, testEvent)
-		a.notifications.recordDelivery("bark", err)
-		if err != nil {
-			results["bark"] = err.Error()
-		} else {
-			results["bark"] = "ok"
-		}
-	}
-	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
-		err := a.notifications.sendTelegram(r.Context(), cfg, testEvent)
-		a.notifications.recordDelivery("telegram", err)
-		if err != nil {
-			results["telegram"] = err.Error()
-		} else {
-			results["telegram"] = "ok"
+	for _, n := range notifiers {
+		for _, ch := range enabledChannels(cfg, n.Type()) {
+			err := n.Send(r.Context(), a.notifications, cfg, ch.Settings, testEvent)
+			a.notifications.recordDelivery(ch.ID, err)
+			if err != nil {
+				results[ch.ID] = err.Error()
+			} else {
+				results[ch.ID] = "ok"
+			}
 		}
 	}
 	if len(results) == 0 {

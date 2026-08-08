@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/mbim"
 )
 
 func TestMBIMBackendImplementsOperatorSelectionProvider(t *testing.T) {

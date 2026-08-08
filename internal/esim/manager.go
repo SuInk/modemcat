@@ -17,10 +17,10 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
-	backendpkg "github.com/SuInk/djsmsforward/internal/backend"
-	"github.com/SuInk/djsmsforward/internal/modem"
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
+	backendpkg "github.com/SuInk/modemcat/internal/backend"
+	"github.com/SuInk/modemcat/internal/modem"
+	"github.com/SuInk/modemcat/pkg/logger"
 	"github.com/damonto/euicc-go/bertlv"
 	"github.com/damonto/euicc-go/driver"
 	"github.com/damonto/euicc-go/lpa"

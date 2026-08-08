@@ -3,7 +3,7 @@ package modem
 import (
 	"testing"
 
-	"github.com/SuInk/djsmsforward/internal/config"
+	"github.com/SuInk/modemcat/internal/config"
 )
 
 func TestPureControlPlaneBackendMBIM(t *testing.T) {

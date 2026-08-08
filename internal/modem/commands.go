@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
-	"github.com/SuInk/djsmsforward/internal/simaid"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
+	"github.com/SuInk/modemcat/internal/simaid"
 )
 
 func (m *Manager) QueryIMEI() (string, error) {
@@ -19,17 +19,40 @@ func (m *Manager) QueryIMEI() (string, error) {
 }
 
 func (m *Manager) QueryFirmware() (string, error) {
+	if m.ATProfile().Family == ATFamilyAirM2M {
+		if verResp, verErr := m.ExecuteATSilent("AT+VER", 2*time.Second); verErr == nil {
+			if firmware := parseFirmware(verResp); firmware != "" {
+				return firmware, nil
+			}
+		}
+	}
 	resp, err := m.ExecuteATSilent("AT+CGMR", 2*time.Second)
-	if err != nil {
+	if err == nil {
+		if firmware := parseFirmware(resp); firmware != "" {
+			return firmware, nil
+		}
+	}
+	if m.ATProfile().Family != ATFamilyAirM2M {
 		return "", err
 	}
-	return parseFirmware(resp), nil
+	// Air780 AT/LSAT/AUAT releases consistently expose AT+VER. Retry it here if
+	// the first read failed transiently and CGMR was unusable too.
+	verResp, verErr := m.ExecuteATSilent("AT+VER", 2*time.Second)
+	if verErr != nil {
+		if err != nil {
+			return "", err
+		}
+		return "", verErr
+	}
+	return parseFirmware(verResp), nil
 }
 
 func (m *Manager) QuerySIMInserted() (bool, error) {
-	if resp, err := m.ExecuteATSilent("AT+QSIMSTAT?", 2*time.Second); err == nil {
-		if inserted, ok := parseQSIMSTATInserted(resp); ok {
-			return inserted, nil
+	if m.ATProfile().Family != ATFamilyAirM2M {
+		if resp, err := m.ExecuteATSilent("AT+QSIMSTAT?", 2*time.Second); err == nil {
+			if inserted, ok := parseQSIMSTATInserted(resp); ok {
+				return inserted, nil
+			}
 		}
 	}
 	resp, err := m.ExecuteATSilent("AT+CPIN?", 2*time.Second)
@@ -51,11 +74,22 @@ func (m *Manager) QueryIMSI() (string, error) {
 }
 
 func (m *Manager) QueryICCID() (string, error) {
-	resp, err := m.ExecuteATSilent("AT+QCCID", 2*time.Second)
-	if err != nil {
-		return "", err
+	var lastErr error
+	commands := []string{"AT+QCCID", "AT+CCID", "AT+ICCID"}
+	if m.ATProfile().Family == ATFamilyAirM2M {
+		commands = []string{"AT+CCID", "AT+ICCID", "AT+QCCID"}
 	}
-	return parseQCCID(resp), nil
+	for _, command := range commands {
+		resp, err := m.ExecuteATSilent(command, 2*time.Second)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if iccid := parseAnyICCID(resp); iccid != "" {
+			return iccid, nil
+		}
+	}
+	return "", lastErr
 }
 
 func (m *Manager) QueryOperator() (string, error) {
@@ -68,15 +102,29 @@ func (m *Manager) QueryOperator() (string, error) {
 }
 
 func (m *Manager) QueryRegistration() (int, string, string, string, error) {
-	resp, err := m.ExecuteATSilent("AT+CREG?", 2*time.Second)
-	if err != nil {
-		return 0, "", "", "", err
+	commands := []struct {
+		command string
+		prefix  string
+	}{{"AT+CREG?", "+CREG:"}}
+	if m.ATProfile().Family == ATFamilyAirM2M {
+		commands = []struct {
+			command string
+			prefix  string
+		}{{"AT+CEREG?", "+CEREG:"}, {"AT+CREG?", "+CREG:"}}
 	}
-	regStatus, lac, cellID, ok := parseCREG(resp)
-	if !ok {
-		return 0, "", "", "", nil
+	var lastErr error
+	for index, candidate := range commands {
+		resp, err := m.ExecuteATSilent(candidate.command, 2*time.Second)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		regStatus, lac, cellID, ok := parseRegistration(resp, candidate.prefix)
+		if ok && (regStatus != 0 || index == len(commands)-1) {
+			return regStatus, m.getRegStatusText(regStatus), lac, cellID, nil
+		}
 	}
-	return regStatus, m.getRegStatusText(regStatus), lac, cellID, nil
+	return 0, "", "", "", lastErr
 }
 
 func (m *Manager) QueryCSQ() (int, int, error) {
@@ -100,6 +148,17 @@ func (m *Manager) QueryServingCellLTE() (int, int, error) {
 }
 
 func (m *Manager) QueryServingCellLTEInfo() (ServingCellLTEInfo, error) {
+	if m.ATProfile().Family == ATFamilyAirM2M {
+		resp, err := m.ExecuteATSilent("AT+CESQ", 3*time.Second)
+		if err != nil {
+			return ServingCellLTEInfo{}, err
+		}
+		rsrp, rsrq, ok := ParseCESQLTE(resp)
+		if !ok {
+			return ServingCellLTEInfo{}, nil
+		}
+		return ServingCellLTEInfo{RSRP: rsrp, RSRQ: rsrq}, nil
+	}
 	resp, err := m.ExecuteATSilent("AT+QENG=\"servingcell\"", 3*time.Second)
 	if err != nil {
 		return ServingCellLTEInfo{}, err
@@ -120,6 +179,9 @@ func (m *Manager) QueryAPN() (string, error) {
 }
 
 func (m *Manager) QueryIMSStatus() (int, error) {
+	if m.ATProfile().Family == ATFamilyAirM2M {
+		return 0, nil
+	}
 	resp, err := m.ExecuteATSilent("AT+QIMS?", 2*time.Second)
 	if err != nil {
 		return 0, err
@@ -134,12 +196,28 @@ func (m *Manager) QueryNetworkModeAndDuplex() (string, string, error) {
 }
 
 func (m *Manager) QueryNetworkRadio() (string, string, string, uint32, error) {
-	resp, err := m.ExecuteATSilent("AT+QNWINFO", 2*time.Second)
-	if err != nil {
-		return "", "", "", 0, err
+	var err error
+	if m.ATProfile().Family != ATFamilyAirM2M {
+		var resp string
+		resp, err = m.ExecuteATSilent("AT+QNWINFO", 2*time.Second)
+		if err == nil {
+			mode, duplex, band, channel := parseQNWInfoRadio(resp)
+			if mode != "" {
+				return mode, duplex, band, channel, nil
+			}
+		}
 	}
-	mode, duplex, band, channel := parseQNWInfoRadio(resp)
-	return mode, duplex, band, channel, nil
+	// Air780 firmware does not implement QNWINFO. COPS is standard and still
+	// reports the active access technology (7 = LTE) on every firmware flavor.
+	copsResp, copsErr := m.ExecuteATSilent("AT+COPS?", 2*time.Second)
+	if copsErr != nil {
+		if err != nil {
+			return "", "", "", 0, err
+		}
+		return "", "", "", 0, copsErr
+	}
+	mode, _ := parseCOPSAct(copsResp)
+	return mode, "", "", 0, nil
 }
 
 func (m *Manager) QueryNetworkMode() (string, error) {
@@ -222,19 +300,49 @@ func (m *Manager) QueryMSISDN() (string, error) {
 
 // QueryUSBNetMode 查询 USBNET 模式
 func (m *Manager) QueryUSBNetMode() (int, error) {
-	resp, err := m.ExecuteATSilent("AT+QCFG=\"usbnet\"?", 2*time.Second)
-	if err != nil {
-		return -1, err
-	}
-	mode, ok := parseUSBNet(resp)
-	if !ok {
+	profile := m.ATProfile()
+	if !profile.SupportsUSBNetwork() {
 		return -1, nil
 	}
+	var err error
+	if profile.Family != ATFamilyAirM2M {
+		var resp string
+		resp, err = m.ExecuteATSilent("AT+QCFG=\"usbnet\"?", 2*time.Second)
+		if err == nil {
+			if mode, ok := parseUSBNet(resp); ok {
+				return mode, nil
+			}
+		}
+	}
+	setUSBResp, setUSBErr := m.ExecuteATSilent("AT+SETUSB?", 2*time.Second)
+	if setUSBErr != nil {
+		if err != nil {
+			return -1, err
+		}
+		return -1, setUSBErr
+	}
+	mode, _ := parseSETUSBMode(setUSBResp)
 	return mode, nil
 }
 
 // SetUSBNetMode 设置 USBNET 模式并重启
 func (m *Manager) SetUSBNetMode(mode int) error {
+	profile := m.ATProfile()
+	if !profile.SupportsUSBNetwork() {
+		return fmt.Errorf("Air780 %s firmware does not provide a USB network interface", profile.Flavor)
+	}
+	if profile.Family == ATFamilyAirM2M {
+		if mode != 1 && mode != 2 {
+			return fmt.Errorf("Air780 SETUSB only supports mode 1 (RNDIS) or 2 (ECM)")
+		}
+		if _, err := m.ExecuteAT(fmt.Sprintf("AT+SETUSB=%d", mode), 5*time.Second); err != nil {
+			return fmt.Errorf("设置 Air780 USB 模式失败: %w", err)
+		}
+		if _, err := m.ExecuteAT("AT+RESET", 5*time.Second); err != nil {
+			return fmt.Errorf("重启 Air780 失败: %w", err)
+		}
+		return nil
+	}
 	cmd := fmt.Sprintf("AT+QCFG=\"usbnet\",%d", mode)
 	_, err := m.ExecuteAT(cmd, 5*time.Second)
 	if err != nil {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/mbim"
 )
 
 // CalculateAKA computes AKA via the MBIM Auth service.

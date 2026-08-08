@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/config"
+	"github.com/SuInk/modemcat/internal/config"
 	"go.bug.st/serial"
 )
 

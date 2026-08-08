@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/logger"
 )
 
 //go:embed ci.json

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
-	"github.com/SuInk/djsmsforward/internal/config"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
+	"github.com/SuInk/modemcat/internal/config"
 )
 
 func newRunningTestManager(t *testing.T) *Manager {

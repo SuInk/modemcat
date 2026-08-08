@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/logger"
 )
 
 var ErrSIMAuthNotReady = errors.New("simauth not ready")

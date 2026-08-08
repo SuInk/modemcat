@@ -2,15 +2,15 @@
 set -eu
 
 PUBLIC_HOST=${1:-}
-TUNNEL_NAME=${2:-djsmsforward}
+TUNNEL_NAME=${2:-modemcat}
 CLOUDFLARED=$(command -v cloudflared || true)
 CLOUDFLARED_DIR="${HOME}/.cloudflared"
-CONFIG_FILE="${CLOUDFLARED_DIR}/djsmsforward.yml"
+CONFIG_FILE="${CLOUDFLARED_DIR}/modemcat.yml"
 CERT_FILE="${CLOUDFLARED_DIR}/cert.pem"
-APP_COMMAND=$(command -v djsmsforward || true)
-LAUNCH_AGENT_LABEL="com.djsmsforward.cloudflared"
+APP_COMMAND=$(command -v modemcat || true)
+LAUNCH_AGENT_LABEL="com.modemcat.cloudflared"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
-LOG_DIR="${HOME}/Library/Logs/DJSMSForward"
+LOG_DIR="${HOME}/Library/Logs/ModemCat"
 
 if [ -z "${PUBLIC_HOST}" ]; then
   echo "用法：$0 sms.example.com [tunnel-name]" >&2
@@ -31,7 +31,7 @@ if [ -z "${CLOUDFLARED}" ]; then
   exit 1
 fi
 if [ -z "${APP_COMMAND}" ]; then
-  echo "未找到 djsmsforward 命令，请先安装 DJSMSForward。" >&2
+  echo "未找到 modemcat 命令，请先安装 ModemCat。" >&2
   exit 1
 fi
 
@@ -84,15 +84,15 @@ if [ ! -f "${CREDENTIALS_FILE}" ]; then
   echo "缺少 Tunnel 凭据文件：${CREDENTIALS_FILE}" >&2
   exit 1
 fi
-if [ -f "${CONFIG_FILE}" ] && ! grep -q '^# Managed by DJSMSForward$' "${CONFIG_FILE}"; then
-  echo "已有非 DJSMSForward 管理的 ${CONFIG_FILE}，为避免覆盖已停止。" >&2
+if [ -f "${CONFIG_FILE}" ] && ! grep -q '^# Managed by ModemCat$' "${CONFIG_FILE}"; then
+  echo "已有非 ModemCat 管理的 ${CONFIG_FILE}，为避免覆盖已停止。" >&2
   exit 1
 fi
 
 umask 077
 TEMPORARY_CONFIG="${CONFIG_FILE}.tmp.$$"
 {
-  echo "# Managed by DJSMSForward"
+  echo "# Managed by ModemCat"
   echo "tunnel: ${TUNNEL_ID}"
   echo "credentials-file: ${CREDENTIALS_FILE}"
   echo "ingress:"
@@ -136,5 +136,5 @@ launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}"
 
 echo
 echo "Cloudflare Tunnel 已配置：https://${PUBLIC_HOST}"
-echo "DJSMSForward 与 Tunnel 均已设置为登录后自动运行。"
+echo "ModemCat 与 Tunnel 均已设置为登录后自动运行。"
 echo "建议在 Cloudflare Access 中仅允许你的邮箱访问该 hostname。"

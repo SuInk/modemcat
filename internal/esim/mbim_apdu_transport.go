@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
 )
 
 type uiccTransport interface {

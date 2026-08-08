@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
+	"github.com/SuInk/modemcat/pkg/mbim"
 	qmiq "github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 )
 

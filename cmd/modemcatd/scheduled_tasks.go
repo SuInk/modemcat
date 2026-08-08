@@ -110,7 +110,7 @@ func scheduledTasksFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJSMSForward", "scheduled-tasks.json"), nil
+	return filepath.Join(dir, "ModemCat", "scheduled-tasks.json"), nil
 }
 
 func (a *app) initScheduledTasks() {
@@ -121,10 +121,19 @@ func (a *app) initScheduledTasks() {
 	if err != nil {
 		log.Printf("scheduled tasks path unavailable: %v", err)
 	}
-	executeSMS := a.sendTextSMS
+	executeSMS := func(phone, message string) (int, error) {
+		if a.demo {
+			a.recordSentSMS(phone, message, time.Now())
+			return 1, nil
+		}
+		segments, sendErr := a.sendTextSMS(phone, message)
+		if sendErr == nil {
+			a.recordSentSMS(phone, message, time.Now())
+		}
+		return segments, sendErr
+	}
 	if a.demo {
 		path = ""
-		executeSMS = func(_, _ string) (int, error) { return 1, nil }
 	}
 	notify := func(event notificationEvent) {
 		if a.notifications != nil {
@@ -556,11 +565,11 @@ func newScheduledTaskEvent(task scheduledTask, run scheduledTaskRun) notificatio
 		trigger = "立即执行"
 	}
 	kind := "scheduled_task_success"
-	title := "DJSMSForward 定时任务成功"
+	title := "ModemCat 定时任务成功"
 	body := fmt.Sprintf("任务：%s\n目标：%s\n方式：%s\n短信分段：%d", task.Name, task.PhoneNumber, trigger, run.Segments)
 	if run.Status == "failed" {
 		kind = "scheduled_task_failure"
-		title = "DJSMSForward 定时任务失败"
+		title = "ModemCat 定时任务失败"
 		body = fmt.Sprintf("任务：%s\n目标：%s\n方式：%s\n原因：%s", task.Name, task.PhoneNumber, trigger, valueOrUnknown(run.Error))
 	}
 	return notificationEvent{

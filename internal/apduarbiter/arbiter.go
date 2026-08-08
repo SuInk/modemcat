@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/logger"
 )
 
 var ErrAPDUBusy = errors.New("apdu busy")

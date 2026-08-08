@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/logger"
 	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 )
 

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/backend"
+	"github.com/SuInk/modemcat/internal/backend"
 	"github.com/damonto/euicc-go/bertlv"
 	"github.com/damonto/euicc-go/bertlv/primitive"
 	"github.com/damonto/euicc-go/driver"

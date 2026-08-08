@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
 	"github.com/warthog618/sms/encoding/tpdu"
 )

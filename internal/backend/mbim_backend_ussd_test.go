@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/mbim"
 )
 
 func TestMBIMBackendUSSDProviderConformance(t *testing.T) {

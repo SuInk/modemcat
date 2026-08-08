@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/SuInk/djsmsforward/internal/modem"
+	"github.com/SuInk/modemcat/internal/modem"
 )
 
 // ModemChannel 实现 euicc-go 的 driver.SmartCardChannel 接口

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SuInk/djsmsforward/internal/modem"
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/internal/modem"
+	"github.com/SuInk/modemcat/pkg/mbim"
 	"github.com/iniwex5/quectel-qmi-go/pkg/manager"
 )
 

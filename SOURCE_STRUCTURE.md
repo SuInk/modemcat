@@ -1,13 +1,13 @@
-# DJSMSForward 精简源码结构
+# ModemCat 精简源码结构
 
-这份目录是从开发工作区中按 `cmd/djsmsforward-macos` 的真实 Go 依赖图整理出的最小可构建源码副本。原项目中的旧 Vue 前端、`node_modules`、Linux 服务端、机器人、未使用的管理后台和历史构建产物均未包含。
+这份目录是从开发工作区中按 `cmd/modemcatd` 的真实 Go 依赖图整理出的最小可构建源码副本。原项目中的旧 Vue 前端、`node_modules`、Linux 服务端、机器人、未使用的管理后台和历史构建产物均未包含。
 
 ## 目录树
 
 ```text
-DJSMSForward-source-minimal/
+ModemCat-source-minimal/
 ├── cmd/
-│   └── djsmsforward-macos/       # macOS 主程序、USB AT、短信、网络与内嵌网页
+│   └── modemcatd/            # macOS 守护进程、USB AT、短信、网络与内嵌网页
 │       └── web/              # 当前实际显示的原生管理页面
 ├── internal/
 │   ├── apduarbiter/          # SIM/eUICC APDU 通道并发协调
@@ -21,7 +21,7 @@ DJSMSForward-source-minimal/
 │   ├── mbim/                 # MBIM 协议实现
 │   └── smscodec/             # SMS PDU 编解码与长短信重组
 ├── packaging/
-│   ├── djsmsforward          # 终端 start/stop/status/logs/open 启动器
+│   ├── modemcat          # 终端 start/stop/status/logs/open 启动器
 │   ├── install               # /usr/local 安装脚本
 │   ├── README.md             # 发行包内的安装说明
 │   └── THIRD_PARTY_NOTICES.md
@@ -40,14 +40,14 @@ DJSMSForward-source-minimal/
 
 ## 关键入口
 
-- `cmd/djsmsforward-macos/main.go`：HTTP 服务、设备状态、短信、eSIM、网络和流量 API。
-- `cmd/djsmsforward-macos/usbat_darwin.go`：macOS 上通过 libusb 接管大疆模块 USB AT 接口。
-- `cmd/djsmsforward-macos/usbat_esim_channel.go`：经 AT/APDU 访问实体 eUICC 卡片。
-- `cmd/djsmsforward-macos/web/`：由 `go:embed` 编译进二进制的网页界面。
+- `cmd/modemcatd/main.go`：HTTP 服务、设备状态、短信、eSIM、网络和流量 API。
+- `cmd/modemcatd/usbat_darwin.go`：macOS 上通过 libusb 接管大疆模块 USB AT 接口。
+- `cmd/modemcatd/usbat_esim_channel.go`：经 AT/APDU 访问实体 eUICC 卡片。
+- `cmd/modemcatd/web/`：由 `go:embed` 编译进二进制的网页界面。
 
 ## 为什么仍有 internal、pkg 和 third_party
 
-Go 以“包”为编译边界。macOS 主程序虽然集中在 `cmd/djsmsforward-macos`，但短信 PDU、eUICC、SIM APDU、MBIM/QMI 和日志能力依赖共享包，因此这些目录不能直接删除。
+Go 以“包”为编译边界。macOS 主程序虽然集中在 `cmd/modemcatd`，但短信 PDU、eUICC、SIM APDU、MBIM/QMI 和日志能力依赖共享包，因此这些目录不能直接删除。
 
 `third_party` 中只保留当前依赖图实际使用的本地替换模块。保留本地副本可以确保当前修改版协议实现与已验证发行包一致，同时保留各上游组件的许可证和来源信息。
 
@@ -73,8 +73,8 @@ go test -mod=mod ./...
 ./scripts/package-macos-arm64.sh v0.1.0-preview
 ```
 
-构建脚本会从 libusb 官方 Release 下载源码、核对 SHA-256，并将编译后的动态库与 DJSMSForward 一起打包。
+构建脚本会从 libusb 官方 Release 下载源码、核对 SHA-256，并将编译后的动态库与 ModemCat 一起打包。
 
 ## 注意
 
-当前 Go module 路径为 `github.com/SuInk/djsmsforward`，命令、二进制、数据目录和 launchd 标识均使用 DJSMSForward 自己的命名。
+当前 Go module 路径为 `github.com/SuInk/modemcat`，命令、二进制、数据目录和 launchd 标识均使用 ModemCat 自己的命名。

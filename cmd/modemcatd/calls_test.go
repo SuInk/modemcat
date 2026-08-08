@@ -159,6 +159,119 @@ func TestRejectCallRefusesNonRingingState(t *testing.T) {
 	}
 }
 
+func TestNormalizeDialNumberRejectsATInjection(t *testing.T) {
+	if got, err := normalizeDialNumber(" +44 (7700) 900-123 "); err != nil || got != "+447700900123" {
+		t.Fatalf("normalizeDialNumber() = %q, %v", got, err)
+	}
+	for _, value := range []string{"", "+", "123;ATH", "123\rATH", "hello"} {
+		if got, err := normalizeDialNumber(value); err == nil {
+			t.Fatalf("normalizeDialNumber(%q) = %q, want error", value, got)
+		}
+	}
+}
+
+func TestDialCallUsesVoiceSemicolon(t *testing.T) {
+	var command string
+	a := &app{atCommandOverride: func(value string, _ time.Duration) (string, error) {
+		command = value
+		return "OK", nil
+	}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/calls/dial", strings.NewReader(`{"number":"+44 7700 900123"}`))
+	a.dialCall(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if command != "ATD+447700900123;" {
+		t.Fatalf("command = %q", command)
+	}
+}
+
+func TestAnswerWaitingCallHoldsActiveCall(t *testing.T) {
+	var command string
+	a := &app{atCommandOverride: func(value string, _ time.Duration) (string, error) {
+		command = value
+		return "OK", nil
+	}}
+	a.applyCallPoll([]parsedCall{
+		{Index: 1, Direction: "incoming", State: "active", Number: "10010"},
+		{Index: 2, Direction: "incoming", State: "waiting", Number: "10086"},
+	}, time.Now())
+	recorder := httptest.NewRecorder()
+	a.answerCall(recorder, httptest.NewRequest(http.MethodPost, "/api/calls/answer", nil))
+	if recorder.Code != http.StatusOK || command != "AT+CHLD=2" {
+		t.Fatalf("status = %d, command = %q, body = %s", recorder.Code, command, recorder.Body.String())
+	}
+}
+
+func TestHangupCallFallsBackToATH(t *testing.T) {
+	var commands []string
+	a := &app{atCommandOverride: func(value string, _ time.Duration) (string, error) {
+		commands = append(commands, value)
+		if value == "AT+CHUP" {
+			return "ERROR", nil
+		}
+		return "OK", nil
+	}}
+	a.applyCallPoll([]parsedCall{{Index: 1, Direction: "outgoing", State: "active", Number: "10086"}}, time.Now())
+	recorder := httptest.NewRecorder()
+	a.hangupCall(recorder, httptest.NewRequest(http.MethodPost, "/api/calls/hangup", nil))
+	if recorder.Code != http.StatusOK || strings.Join(commands, ",") != "AT+CHUP,ATH" {
+		t.Fatalf("status = %d, commands = %q, body = %s", recorder.Code, commands, recorder.Body.String())
+	}
+}
+
+func TestCallDTMFRequiresActiveCallAndQuotesTone(t *testing.T) {
+	var command string
+	a := &app{atCommandOverride: func(value string, _ time.Duration) (string, error) {
+		command = value
+		return "OK", nil
+	}}
+	a.applyCallPoll([]parsedCall{{Index: 1, Direction: "outgoing", State: "active", Number: "10086"}}, time.Now())
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/calls/dtmf", strings.NewReader(`{"tone":"#"}`))
+	a.sendCallDTMF(recorder, request)
+	if recorder.Code != http.StatusOK || command != `AT+VTS="#"` {
+		t.Fatalf("status = %d, command = %q, body = %s", recorder.Code, command, recorder.Body.String())
+	}
+}
+
+func TestProbeCallCapabilitiesDetectsUAC(t *testing.T) {
+	a := &app{atCommandOverride: func(command string, _ time.Duration) (string, error) {
+		switch command {
+		case "AT+QPCMV=?":
+			return "+QPCMV: (0,1),(0,2)\r\nOK", nil
+		case "AT+QPCMV?":
+			return "+QPCMV: 1,2\r\nOK", nil
+		default:
+			t.Fatalf("unexpected command %q", command)
+			return "", nil
+		}
+	}}
+	recorder := httptest.NewRecorder()
+	a.probeCallCapabilities(recorder, httptest.NewRequest(http.MethodPost, "/api/calls/capabilities", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"audio_mode":"uac"`) ||
+		!strings.Contains(recorder.Body.String(), `"audio_forwarding":true`) {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestStartAndStopCallAudioUseQPCMV(t *testing.T) {
+	var commands []string
+	a := &app{atCommandOverride: func(command string, _ time.Duration) (string, error) {
+		commands = append(commands, command)
+		return "OK", nil
+	}}
+	startRecorder := httptest.NewRecorder()
+	a.startCallAudio(startRecorder, httptest.NewRequest(http.MethodPost, "/api/calls/audio/start", nil))
+	stopRecorder := httptest.NewRecorder()
+	a.stopCallAudio(stopRecorder, httptest.NewRequest(http.MethodPost, "/api/calls/audio/stop", nil))
+	if startRecorder.Code != http.StatusOK || stopRecorder.Code != http.StatusOK ||
+		strings.Join(commands, ",") != "AT+QPCMV=1,2,AT+QPCMV=0" {
+		t.Fatalf("start=%d stop=%d commands=%q", startRecorder.Code, stopRecorder.Code, commands)
+	}
+}
+
 func TestCallIndexReuseCreatesNewSession(t *testing.T) {
 	a := &app{}
 	started := time.Now()

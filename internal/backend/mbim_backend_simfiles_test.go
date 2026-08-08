@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/mbim"
 )
 
 func mbimResetCapableForTest() *mbim.Capabilities {

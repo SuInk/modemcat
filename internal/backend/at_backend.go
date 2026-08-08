@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/modem"
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/internal/modem"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 )
 
 // ATBackend AT 后端适配器 — 纯包装层，委托给现有 modem.Manager

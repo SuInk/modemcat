@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 )
 
 func TestUSBLongSMSReassembly(t *testing.T) {

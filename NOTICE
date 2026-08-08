@@ -1,9 +1,9 @@
-DJSMSForward
+ModemCat
 
-DJSMSForward is an independently maintained project derived from work in VoHive
+ModemCat is an independently maintained project derived from work in VoHive
 and DJOneHub. The current modifications are maintained at:
 
-https://github.com/SuInk/djsmsforward
+https://github.com/SuInk/modemcat
 
 The project remains distributed under the PolyForm Noncommercial License 1.0.0
 in LICENSE. The upstream required notice is retained unchanged:

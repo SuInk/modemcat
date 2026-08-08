@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 )
 
 func (b *MBIMBackend) SendSMS(ctx context.Context, to, body string) error {

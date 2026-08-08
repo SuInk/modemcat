@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
 )
 
 func TestAPDUCoordinatorChanMuIsStablePerChannel(t *testing.T) {

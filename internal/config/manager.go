@@ -3,7 +3,7 @@ package config
 import (
 	"sync"
 
-	"github.com/SuInk/djsmsforward/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/logger"
 )
 
 var (

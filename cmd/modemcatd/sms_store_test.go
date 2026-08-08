@@ -9,7 +9,7 @@ import (
 )
 
 func TestSMSInboxPersistsAcrossRestart(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "DJSMSForward")
+	directory := filepath.Join(t.TempDir(), "ModemCat")
 	path := filepath.Join(directory, "sms-inbox.json")
 	first := &app{}
 	if err := first.initSMSInboxAt(path); err != nil {
@@ -52,14 +52,41 @@ func TestSMSInboxPersistsAcrossRestart(t *testing.T) {
 	if second.sms[1].Code != "482913" {
 		t.Fatalf("reloaded verification code = %q, want 482913", second.sms[1].Code)
 	}
+	if second.sms[0].Direction != "incoming" || second.sms[1].Direction != "incoming" {
+		t.Fatalf("legacy inbox messages were not normalized as incoming: %+v", second.sms)
+	}
 	added, total, persisted = second.mergeSMS(messages, false)
 	if added != 0 || total != 2 || !persisted {
 		t.Fatalf("duplicate merge result = added %d total %d persisted %v", added, total, persisted)
 	}
 }
 
+func TestSentSMSPersistsInConversationHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ModemCat", "sms-inbox.json")
+	instance := &app{}
+	if err := instance.initSMSInboxAt(path); err != nil {
+		t.Fatal(err)
+	}
+	sentAt := time.Date(2026, 8, 6, 9, 30, 0, 0, time.Local)
+	instance.recordSentSMS("+447700900123", "hello from ModemCat", sentAt)
+
+	loaded, err := loadSMSInbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded SMS count = %d, want 1", len(loaded))
+	}
+	if loaded[0].Direction != "outgoing" || loaded[0].Recipient != "+447700900123" || loaded[0].Sender != "" {
+		t.Fatalf("sent SMS metadata = %+v", loaded[0])
+	}
+	if loaded[0].Content != "hello from ModemCat" || !loaded[0].Timestamp.Equal(sentAt) {
+		t.Fatalf("sent SMS content = %+v", loaded[0])
+	}
+}
+
 func TestSMSInboxPersistsMessagesReceivedBeforeInitialization(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "DJSMSForward", "sms-inbox.json")
+	path := filepath.Join(t.TempDir(), "ModemCat", "sms-inbox.json")
 	message := receivedSMS{Sender: "10001", Content: "early message", Timestamp: time.Now()}
 	instance := &app{sms: []receivedSMS{message}}
 	if err := instance.initSMSInboxAt(path); err != nil {

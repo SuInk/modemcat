@@ -27,11 +27,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/SuInk/djsmsforward/internal/backend"
-	"github.com/SuInk/djsmsforward/internal/config"
-	"github.com/SuInk/djsmsforward/internal/esim"
-	"github.com/SuInk/djsmsforward/internal/modem"
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/internal/backend"
+	"github.com/SuInk/modemcat/internal/config"
+	"github.com/SuInk/modemcat/internal/esim"
+	"github.com/SuInk/modemcat/internal/modem"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 	"github.com/damonto/euicc-go/driver"
 )
 
@@ -39,7 +39,9 @@ import (
 var webAssets embed.FS
 
 type receivedSMS struct {
-	Sender    string    `json:"sender"`
+	Sender    string    `json:"sender,omitempty"`
+	Recipient string    `json:"recipient,omitempty"`
+	Direction string    `json:"direction"`
 	Content   string    `json:"content"`
 	Code      string    `json:"code,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
@@ -153,21 +155,30 @@ type usbDeviceStatus struct {
 	LocationID string               `json:"location_id"`
 	Speed      string               `json:"speed"`
 	Mode       string               `json:"mode"`
+	Family     modem.ATFamily       `json:"family,omitempty"`
 	Interfaces []usbInterfaceStatus `json:"interfaces"`
 }
 
+type deviceStatusResponse struct {
+	modem.DeviceStatus
+	USBDevice *usbDeviceStatus `json:"usb_device,omitempty"`
+}
+
 type networkDiagnostic struct {
-	USBNetMode        string            `json:"usbnet_mode"`
-	USBCfg            string            `json:"usbcfg"`
-	PDPContexts       []pdpContext      `json:"pdp_contexts"`
-	ActiveContexts    []int             `json:"active_contexts"`
-	PDPAddresses      []string          `json:"pdp_addresses"`
-	MacInterfaces     []macNetInterface `json:"mac_interfaces"`
-	DefaultRoute      macDefaultRoute   `json:"default_route"`
-	USBNetworkPresent bool              `json:"usb_network_present"`
-	USBDevice         *usbDeviceStatus  `json:"usb_device,omitempty"`
-	Raw               map[string]string `json:"raw,omitempty"`
-	Errors            map[string]string `json:"errors,omitempty"`
+	ModuleFamily        modem.ATFamily    `json:"module_family,omitempty"`
+	FirmwareFlavor      string            `json:"firmware_flavor,omitempty"`
+	USBNetworkSupported bool              `json:"usb_network_supported"`
+	USBNetMode          string            `json:"usbnet_mode"`
+	USBCfg              string            `json:"usbcfg"`
+	PDPContexts         []pdpContext      `json:"pdp_contexts"`
+	ActiveContexts      []int             `json:"active_contexts"`
+	PDPAddresses        []string          `json:"pdp_addresses"`
+	MacInterfaces       []macNetInterface `json:"mac_interfaces"`
+	DefaultRoute        macDefaultRoute   `json:"default_route"`
+	USBNetworkPresent   bool              `json:"usb_network_present"`
+	USBDevice           *usbDeviceStatus  `json:"usb_device,omitempty"`
+	Raw                 map[string]string `json:"raw,omitempty"`
+	Errors              map[string]string `json:"errors,omitempty"`
 }
 
 type pdpContext struct {
@@ -221,7 +232,7 @@ func main() {
 	var listen string
 	var demo bool
 	var publicOrigin string
-	publicOriginDefault := os.Getenv("DJSMSFORWARD_PUBLIC_ORIGIN")
+	publicOriginDefault := os.Getenv("MODEMCAT_PUBLIC_ORIGIN")
 	flag.StringVar(&port, "port", "", "AT serial port; auto-detected when omitted")
 	flag.StringVar(&listen, "listen", "127.0.0.1:7575", "HTTP listen address")
 	flag.BoolVar(&demo, "demo", false, "run the web UI with simulated modem data")
@@ -237,7 +248,7 @@ func main() {
 
 	if demo {
 		instance := newDemoApp()
-		log.Printf("DJSMSForward demo mode")
+		log.Printf("ModemCat demo mode")
 		serve(instance, listen, publicOrigin)
 		return
 	}
@@ -246,8 +257,8 @@ func main() {
 		var err error
 		port, err = discoverATPort()
 		if err != nil {
-			usbDevice := discoverDJIUSBDevice()
-			usbATDevice, usbATErr := openDJIUSBAT()
+			usbDevice := discoverSupportedUSBDevice()
+			usbATDevice, usbATErr := openModuleUSBAT()
 			instance := &app{
 				port:             "未发现 AT 串口",
 				discoveryError:   err.Error(),
@@ -259,7 +270,7 @@ func main() {
 				callPollInterval: 2 * time.Second,
 			}
 			if usbDevice != nil {
-				log.Printf("DJI USB device detected without AT serial port: %s %s (%s:%s)",
+				log.Printf("supported modem USB device detected without AT serial port: %s %s (%s:%s)",
 					usbDevice.Vendor, usbDevice.Product, usbDevice.VendorID, usbDevice.ProductID)
 			}
 			if usbATErr != nil {
@@ -268,7 +279,7 @@ func main() {
 				instance.port = usbATDevice.Description()
 				instance.discoveryError = ""
 				defer usbATDevice.Close()
-				log.Printf("USB AT bridge opened on DJI %s", usbATDevice.Description())
+				log.Printf("USB AT bridge opened on %s", usbATDevice.Description())
 				instance.initUSBATESIMManager()
 			}
 			log.Printf("modem discovery skipped: %v", err)
@@ -402,7 +413,7 @@ func serve(instance *app, listen, publicOrigin string) {
 
 	if !instance.demo {
 		port, _ := instance.transportSnapshot()
-		log.Printf("DJSMSForward is using %s", port)
+		log.Printf("ModemCat is using %s", port)
 	}
 	log.Printf("Open http://%s", listen)
 	serveErr := make(chan error, 1)
@@ -416,7 +427,7 @@ func serve(instance *app, listen, publicOrigin string) {
 			log.Printf("HTTP server stopped unexpectedly: %v", err)
 		}
 	case <-ctx.Done():
-		log.Printf("DJSMSForward is stopping")
+		log.Printf("ModemCat is stopping")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -436,7 +447,7 @@ func newDemoApp() *app {
 		sms: []receivedSMS{
 			{
 				Sender:    "10086",
-				Content:   "【DJSMSForward 演示】本月套餐剩余流量 18.6GB。",
+				Content:   "【ModemCat 演示】本月套餐剩余流量 18.6GB。",
 				Timestamp: now.Add(-18 * time.Minute),
 			},
 			{
@@ -474,14 +485,16 @@ func discoverATPort() (string, error) {
 		}
 	}
 	if len(attempted) == 0 {
-		return "", errors.New("no Quectel/DJI USB serial ports found; pass -port /dev/cu.* explicitly")
+		return "", errors.New("no supported modem USB serial ports found; pass -port /dev/cu.* explicitly")
 	}
 	return "", fmt.Errorf("no AT-capable port found among %s", strings.Join(attempted, ", "))
 }
 
 func portScore(port string) int {
 	name := strings.ToLower(port)
-	if strings.Contains(name, "quectel") || strings.Contains(name, "dji") {
+	if strings.Contains(name, "quectel") || strings.Contains(name, "dji") ||
+		strings.Contains(name, "airm2m") || strings.Contains(name, "air780") ||
+		strings.Contains(name, "eigencomm") || strings.Contains(name, "openluat") {
 		return 100
 	}
 	if strings.Contains(name, "usbmodem") {
@@ -493,7 +506,7 @@ func portScore(port string) int {
 	return 0
 }
 
-func discoverDJIUSBDevice() *usbDeviceStatus {
+func discoverSupportedUSBDevice() *usbDeviceStatus {
 	out, err := exec.Command("ioreg", "-r", "-c", "IOUSBHostInterface", "-l", "-w", "0").Output()
 	if err != nil {
 		return nil
@@ -503,7 +516,7 @@ func discoverDJIUSBDevice() *usbDeviceStatus {
 	for _, block := range strings.Split(string(out), "\n\n") {
 		vendorID, okVendor := intProperty(block, "idVendor")
 		productID, okProduct := intProperty(block, "idProduct")
-		if !okVendor || !okProduct || vendorID != 0x2ca3 {
+		if !okVendor || !okProduct || !isSupportedModuleUSBID(vendorID, productID) {
 			continue
 		}
 		if device == nil {
@@ -515,12 +528,13 @@ func discoverDJIUSBDevice() *usbDeviceStatus {
 				LocationID: formatHexProperty(block, "locationID"),
 				Speed:      usbSpeedName(intPropertyOrZero(block, "USBSpeed")),
 				Mode:       "vendor-specific USB mode",
+				Family:     moduleFamilyForUSBID(vendorID, productID),
 			}
 			if strings.TrimSpace(device.Product) == "" {
-				device.Product = "DJI 4G Module"
+				device.Product = supportedModuleFallbackProduct(vendorID, productID)
 			}
 			if strings.TrimSpace(device.Vendor) == "" {
-				device.Vendor = "DJI"
+				device.Vendor = supportedModuleFallbackVendor(vendorID, productID)
 			}
 		}
 		ifaceNumber, okIface := intProperty(block, "bInterfaceNumber")
@@ -542,10 +556,44 @@ func discoverDJIUSBDevice() *usbDeviceStatus {
 	sort.SliceStable(device.Interfaces, func(i, j int) bool {
 		return device.Interfaces[i].Number < device.Interfaces[j].Number
 	})
-	if allVendorSpecific(device.Interfaces) {
+	if device.Family == modem.ATFamilyAirM2M && allVendorSpecific(device.Interfaces) {
+		device.Mode = "Air780 AT/diagnostic mode"
+	} else if device.Family == modem.ATFamilyAirM2M {
+		device.Mode = "Air780 USB network mode"
+	} else if allVendorSpecific(device.Interfaces) {
 		device.Mode = "vendor-specific QMI/diagnostic mode"
 	}
 	return device
+}
+
+func isSupportedModuleUSBID(vendorID, productID int) bool {
+	return (vendorID == 0x2ca3 && productID == 0x4006) ||
+		(vendorID == 0x2c7c && productID == 0x0125) ||
+		(vendorID == 0x19d1 && productID == 0x0001)
+}
+
+func moduleFamilyForUSBID(vendorID, productID int) modem.ATFamily {
+	if vendorID == 0x19d1 && productID == 0x0001 {
+		return modem.ATFamilyAirM2M
+	}
+	if isSupportedModuleUSBID(vendorID, productID) {
+		return modem.ATFamilyQuectel
+	}
+	return modem.ATFamilyUnknown
+}
+
+func supportedModuleFallbackProduct(vendorID, productID int) string {
+	if moduleFamilyForUSBID(vendorID, productID) == modem.ATFamilyAirM2M {
+		return "Air780"
+	}
+	return "DJI 4G Module"
+}
+
+func supportedModuleFallbackVendor(vendorID, productID int) string {
+	if moduleFamilyForUSBID(vendorID, productID) == modem.ATFamilyAirM2M {
+		return "AirM2M"
+	}
+	return "DJI"
 }
 
 func allVendorSpecific(interfaces []usbInterfaceStatus) bool {
@@ -612,8 +660,19 @@ func usbSpeedName(speed int) string {
 
 func (a *app) recordSMS(sender, content string, timestamp time.Time) {
 	a.mergeSMS([]receivedSMS{{
-		Sender: sender, Content: content, Timestamp: timestamp,
+		Sender: sender, Direction: "incoming", Content: content, Timestamp: timestamp,
 	}}, true)
+}
+
+func (a *app) recordSentSMS(recipient, content string, timestamp time.Time) receivedSMS {
+	message := receivedSMS{
+		Recipient: strings.TrimSpace(recipient),
+		Direction: "outgoing",
+		Content:   content,
+		Timestamp: timestamp,
+	}
+	a.mergeSMS([]receivedSMS{message}, false)
+	return message
 }
 
 func (a *app) mergeSMS(messages []receivedSMS, allowNotifications bool) (newCount int, total int, persisted bool) {
@@ -624,6 +683,7 @@ func (a *app) mergeSMS(messages []receivedSMS, allowNotifications bool) (newCoun
 		seen[smsCacheKey(item)] = true
 	}
 	for _, item := range messages {
+		item.Direction = smsDirection(item)
 		if item.Code == "" {
 			item.Code = extractSMSCode(item.Content)
 		}
@@ -676,7 +736,14 @@ func (a *app) markSMSNotificationsReady() {
 }
 
 func smsCacheKey(item receivedSMS) string {
-	return item.Sender + "\x00" + item.Content + "\x00" + item.Timestamp.Format(time.RFC3339Nano)
+	return smsDirection(item) + "\x00" + item.Sender + "\x00" + item.Recipient + "\x00" + item.Content + "\x00" + item.Timestamp.Format(time.RFC3339Nano)
+}
+
+func smsDirection(item receivedSMS) string {
+	if strings.EqualFold(strings.TrimSpace(item.Direction), "outgoing") {
+		return "outgoing"
+	}
+	return "incoming"
 }
 
 func (a *app) setSMSPollStatus(err error) {
@@ -755,10 +822,10 @@ func (a *app) ensureUSBAT() error {
 		return nil
 	}
 	if a.currentUSBDevice() == nil {
-		a.port = "未检测到 DJI USB 设备"
-		a.discoveryError = "DJI USB device is not connected"
+		a.port = "未检测到支持的 USB 模块"
+		a.discoveryError = "supported modem USB device is not connected"
 		a.usbATMu.Unlock()
-		return errors.New("DJI USB device is not connected")
+		return errors.New("supported modem USB device is not connected")
 	}
 	if !a.usbATBackoffUntil.IsZero() && time.Now().Before(a.usbATBackoffUntil) {
 		if a.usbATBackoffErr != "" {
@@ -769,7 +836,7 @@ func (a *app) ensureUSBAT() error {
 		a.usbATMu.Unlock()
 		return errors.New("USB AT is cooling down after disconnect")
 	}
-	dev, err := openDJIUSBAT()
+	dev, err := openModuleUSBAT()
 	if err != nil {
 		a.usbATMu.Unlock()
 		return err
@@ -781,7 +848,7 @@ func (a *app) ensureUSBAT() error {
 	a.port = dev.Description()
 	a.discoveryError = ""
 	a.usbATMu.Unlock()
-	log.Printf("USB AT bridge opened on DJI %s", dev.Description())
+	log.Printf("USB AT bridge opened on %s", dev.Description())
 	// The first open may fail while USB is re-enumerating. When a later poll
 	// succeeds, rebuild the eSIM service that startup could not create.
 	a.initUSBATESIMManager()
@@ -806,8 +873,8 @@ func (a *app) markUSBATDetached(reason string) {
 	a.usbATMu.Lock()
 	dev := a.usbAT
 	a.usbAT = nil
-	a.port = "未检测到 DJI USB 设备"
-	a.discoveryError = "DJI USB device is not connected"
+	a.port = "未检测到支持的 USB 模块"
+	a.discoveryError = "supported modem USB device is not connected"
 	a.usbATBackoffUntil = time.Now().Add(2 * time.Second)
 	a.usbATBackoffErr = reason
 	a.usbATMu.Unlock()
@@ -870,7 +937,14 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/sms/refresh", a.refreshSMS)
 	mux.HandleFunc("POST /api/sms/clear-module", a.clearModuleSMS)
 	mux.HandleFunc("GET /api/calls/status", a.callStatus)
+	mux.HandleFunc("POST /api/calls/dial", a.dialCall)
+	mux.HandleFunc("POST /api/calls/answer", a.answerCall)
+	mux.HandleFunc("POST /api/calls/hangup", a.hangupCall)
 	mux.HandleFunc("POST /api/calls/reject", a.rejectCall)
+	mux.HandleFunc("POST /api/calls/dtmf", a.sendCallDTMF)
+	mux.HandleFunc("POST /api/calls/capabilities", a.probeCallCapabilities)
+	mux.HandleFunc("POST /api/calls/audio/start", a.startCallAudio)
+	mux.HandleFunc("POST /api/calls/audio/stop", a.stopCallAudio)
 	mux.HandleFunc("GET /api/notifications", a.notificationSettings)
 	mux.HandleFunc("PUT /api/notifications", a.updateNotificationSettings)
 	mux.HandleFunc("POST /api/notifications/test", a.testNotifications)
@@ -1048,21 +1122,22 @@ func (a *app) health(w http.ResponseWriter, _ *http.Request) {
 func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 	if a.demo {
 		writeJSON(w, http.StatusOK, modem.DeviceStatus{
-			IMEI:          "867400000000001",
-			Firmware:      "EG25GGBR07A08M2G",
-			ICCID:         "89860123456789012345",
-			IMSI:          "460001234567890",
-			Operator:      "China Mobile",
-			SimInserted:   true,
-			SignalDBM:     -73,
-			SignalRSRP:    -96,
-			SignalRSRQ:    -9,
-			RegStatus:     1,
-			RegStatusText: "已注册",
-			NetworkMode:   "LTE",
-			NetworkDuplex: "FDD",
-			RadioBand:     "B3",
-			USBNetMode:    0,
+			IMEI:                "867400000000001",
+			Firmware:            "EG25GGBR07A08M2G",
+			ICCID:               "89860123456789012345",
+			IMSI:                "460001234567890",
+			Operator:            "China Mobile",
+			SimInserted:         true,
+			SignalDBM:           -73,
+			SignalRSRP:          -96,
+			SignalRSRQ:          -9,
+			RegStatus:           1,
+			RegStatusText:       "已注册",
+			NetworkMode:         "LTE",
+			NetworkDuplex:       "FDD",
+			RadioBand:           "B3",
+			USBNetMode:          0,
+			USBNetworkSupported: true,
 		})
 		return
 	}
@@ -1070,7 +1145,7 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 		// A libusb handle may survive a physical unplug. Refresh the macOS USB
 		// inventory before using it so the UI never reports a stale connection.
 		if a.hasUSBAT() && a.currentUSBDevice() == nil && a.usbDeviceConfirmedMissing() {
-			a.markUSBATDetached("DJI USB device disconnected")
+			a.markUSBATDetached("supported modem USB device disconnected")
 		}
 		if err := a.ensureUSBAT(); err != nil {
 			log.Printf("USB AT retry failed: %v", err)
@@ -1078,7 +1153,7 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 		if a.hasUSBAT() {
 			status, err := a.usbATStatus()
 			if err == nil {
-				writeJSON(w, http.StatusOK, status)
+				writeJSON(w, http.StatusOK, deviceStatusResponse{DeviceStatus: status, USBDevice: a.currentUSBDevice()})
 				return
 			}
 			a.resetUSBATIfGone(err)
@@ -1095,13 +1170,14 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 			network = usbDevice.Mode
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"operator":        operator,
-			"signal_dbm":      nil,
-			"network_mode":    network,
-			"sim_inserted":    false,
-			"hardware_status": summary,
-			"discovery_error": discoveryError,
-			"usb_device":      usbDevice,
+			"operator":              operator,
+			"signal_dbm":            nil,
+			"network_mode":          network,
+			"sim_inserted":          false,
+			"hardware_status":       summary,
+			"discovery_error":       discoveryError,
+			"usb_device":            usbDevice,
+			"usb_network_supported": false,
 		})
 		return
 	}
@@ -1114,7 +1190,7 @@ func (a *app) currentUSBDevice() *usbDeviceStatus {
 		defer a.usbDeviceMu.RUnlock()
 		return a.usbDevice
 	}
-	usbDevice := discoverDJIUSBDevice()
+	usbDevice := discoverSupportedUSBDevice()
 	a.usbDeviceMu.Lock()
 	defer a.usbDeviceMu.Unlock()
 	if usbDevice == nil {
@@ -1133,42 +1209,89 @@ func (a *app) usbDeviceConfirmedMissing() bool {
 }
 
 func (a *app) usbATStatus() (modem.DeviceStatus, error) {
-	firmwareResp, _ := a.commandUSBAT("ATI", 3*time.Second)
+	family := a.usbATFamily()
+	atiResp, _ := a.commandUSBAT("ATI", 3*time.Second)
+	cgmrResp := a.firstUSBATResponse("AT+CGMR")
+	firmwareResp := strings.TrimSpace(atiResp + "\n" + cgmrResp)
+	if family == modem.ATFamilyAirM2M {
+		firmwareResp += "\n" + a.firstUSBATResponse("AT+VER")
+	}
+	profile := modem.DetectATProfile(firmwareResp)
+	if profile.Family == modem.ATFamilyUnknown {
+		profile.Family = family
+	}
+	imeiResp := a.firstUSBATResponse("AT+CGSN", "AT+GSN")
 	cpinResp, cpinErr := a.commandUSBAT("AT+CPIN?", 3*time.Second)
 	csqResp, _ := a.commandUSBAT("AT+CSQ", 3*time.Second)
+	cesqResp := ""
+	if family == modem.ATFamilyAirM2M {
+		cesqResp = a.firstUSBATResponse("AT+CESQ")
+	}
 	ceregResp, _ := a.commandUSBAT("AT+CEREG?", 3*time.Second)
 	cregResp, _ := a.commandUSBAT("AT+CREG?", 3*time.Second)
 	_, _ = a.commandUSBAT("AT+COPS=3,2", 3*time.Second)
 	copsResp, _ := a.commandUSBAT("AT+COPS?", 3*time.Second)
-	qccidResp, _ := a.commandUSBAT("AT+QCCID", 3*time.Second)
+	iccidCommands := []string{"AT+QCCID", "AT+CCID", "AT+ICCID"}
+	if family == modem.ATFamilyAirM2M {
+		iccidCommands = []string{"AT+CCID", "AT+ICCID", "AT+QCCID"}
+	}
+	iccidResp := a.firstUSBATResponse(iccidCommands...)
 	cimiResp, _ := a.commandUSBAT("AT+CIMI", 3*time.Second)
-	qnwinfoResp, _ := a.commandUSBAT("AT+QNWINFO", 3*time.Second)
-	usbnetResp, _ := a.commandUSBAT(`AT+QCFG="usbnet"`, 3*time.Second)
+	var radioResp, usbnetResp, imsResp string
+	if family == modem.ATFamilyAirM2M {
+		radioResp = copsResp
+		if profile.SupportsUSBNetwork() {
+			usbnetResp = a.firstUSBATResponse("AT+SETUSB?")
+		}
+	} else {
+		radioResp = a.firstUSBATResponse("AT+QNWINFO")
+		usbnetResp = a.firstUSBATResponse(`AT+QCFG="usbnet"`)
+		imsResp = a.firstUSBATResponse(`AT+QCFG="ims"`)
+	}
 
 	if cpinErr != nil {
 		return modem.DeviceStatus{}, cpinErr
 	}
 
 	regStatus := firstNonZeroRegistration(ceregResp, cregResp)
-	mode, duplex, band, channel := parseUSBATQNWInfo(qnwinfoResp)
+	mode, duplex, band, channel := parseUSBATQNWInfo(radioResp)
+	if mode == "" {
+		mode = parseUSBATCOPSMode(copsResp)
+	}
 	usbnetMode := -1
-	if parsedMode, err := strconv.Atoi(parseUSBNetMode(usbnetResp)); err == nil {
+	if parsedMode, ok := parseModuleUSBMode(usbnetResp, family); ok {
 		usbnetMode = parsedMode
 	}
 	status := modem.DeviceStatus{
-		Firmware:      parseUSBATFirmware(firmwareResp),
-		ICCID:         parseUSBATPrefixed(qccidResp, "+QCCID:"),
-		IMSI:          parseUSBATIMSI(cimiResp),
-		Operator:      parseUSBATOperator(copsResp),
-		SimInserted:   strings.Contains(strings.ToUpper(cpinResp), "READY"),
-		SignalDBM:     parseUSBATCSQDBM(csqResp),
-		RegStatus:     regStatus,
-		RegStatusText: registrationText(regStatus),
-		NetworkMode:   mode,
-		NetworkDuplex: duplex,
-		RadioBand:     band,
-		RadioChannel:  channel,
-		USBNetMode:    usbnetMode,
+		IMEI:                parseUSBATIMEI(imeiResp),
+		Firmware:            parseUSBATFirmware(firmwareResp),
+		ICCID:               parseUSBATICCID(iccidResp),
+		IMSI:                parseUSBATIMSI(cimiResp),
+		Operator:            parseUSBATOperator(copsResp),
+		SimInserted:         strings.Contains(strings.ToUpper(cpinResp), "READY"),
+		SignalDBM:           parseUSBATCSQDBM(csqResp),
+		RegStatus:           regStatus,
+		RegStatusText:       registrationText(regStatus),
+		NetworkMode:         mode,
+		NetworkDuplex:       duplex,
+		RadioBand:           band,
+		RadioChannel:        channel,
+		USBNetMode:          usbnetMode,
+		ModuleFamily:        profile.Family,
+		FirmwareFlavor:      profile.Flavor,
+		ModuleModel:         profile.Model,
+		USBNetworkSupported: profile.SupportsUSBNetwork(),
+	}
+	if rsrp, rsrq, ok := modem.ParseCESQLTE(cesqResp); ok {
+		status.SignalRSRP = rsrp
+		status.SignalRSRQ = rsrq
+	}
+	if family == modem.ATFamilyAirM2M && (regStatus == 1 || regStatus == 5) {
+		status.SMSReachable = true
+	} else {
+		reach := modem.ParseReachability(cregResp, imsResp)
+		status.SMSReachable = reach.Reachable
+		status.SMSDetail = reach.Remedy
 	}
 	if status.Operator == "" && strings.Contains(copsResp, "CHN-UNICOM") {
 		status.Operator = "CHN-UNICOM"
@@ -1176,17 +1299,102 @@ func (a *app) usbATStatus() (modem.DeviceStatus, error) {
 	return status, nil
 }
 
+func (a *app) usbATFamily() modem.ATFamily {
+	a.usbATMu.RLock()
+	defer a.usbATMu.RUnlock()
+	if a.usbAT == nil {
+		return modem.ATFamilyUnknown
+	}
+	return a.usbAT.Family()
+}
+
+func (a *app) moduleATFamily() modem.ATFamily {
+	if a.modem != nil {
+		return a.modem.ATProfile().Family
+	}
+	if family := a.usbATFamily(); family != modem.ATFamilyUnknown {
+		return family
+	}
+	if device := a.currentUSBDevice(); device != nil {
+		return device.Family
+	}
+	return modem.ATFamilyUnknown
+}
+
+func (a *app) moduleATProfile() modem.ATProfile {
+	if a.modem != nil {
+		return a.modem.ATProfile()
+	}
+	family := a.usbATFamily()
+	profile := modem.ATProfile{Family: family}
+	if family == modem.ATFamilyAirM2M && a.hasUSBAT() {
+		identity := strings.Join([]string{
+			a.firstUSBATResponse("ATI"),
+			a.firstUSBATResponse("AT+CGMR"),
+			a.firstUSBATResponse("AT+VER"),
+		}, "\n")
+		detected := modem.DetectATProfile(identity)
+		if detected.Family == modem.ATFamilyUnknown {
+			detected.Family = family
+		}
+		return detected
+	}
+	if profile.Family == modem.ATFamilyUnknown {
+		if device := a.currentUSBDevice(); device != nil {
+			profile.Family = device.Family
+		}
+	}
+	return profile
+}
+
+func (a *app) firstUSBATResponse(commands ...string) string {
+	for _, command := range commands {
+		response, err := a.commandUSBAT(command, 3*time.Second)
+		if err == nil && !atResponseIsError(response) {
+			return response
+		}
+	}
+	return ""
+}
+
 func parseUSBATFirmware(resp string) string {
 	lines := splitATLines(resp)
+	for _, line := range lines {
+		upper := strings.ToUpper(line)
+		if marker := strings.Index(upper, "AIRM2M_"); marker >= 0 {
+			return strings.TrimSpace(line[marker:])
+		}
+	}
 	var useful []string
 	for _, line := range lines {
 		up := strings.ToUpper(line)
-		if strings.HasPrefix(up, "ATI") || up == "OK" {
+		if strings.HasPrefix(up, "AT") || up == "OK" || up == "ERROR" {
 			continue
 		}
 		useful = append(useful, line)
 	}
 	return strings.Join(useful, " · ")
+}
+
+func parseUSBATIMEI(resp string) string {
+	for _, line := range splitATLines(resp) {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "+CGSN:"))
+		if len(line) == 15 {
+			if _, err := strconv.ParseUint(line, 10, 64); err == nil {
+				return line
+			}
+		}
+	}
+	return ""
+}
+
+func parseUSBATICCID(resp string) string {
+	for _, prefix := range []string{"+QCCID:", "+CCID:", "+ICCID:"} {
+		if value := parseUSBATPrefixed(resp, prefix); value != "" {
+			return strings.TrimRight(strings.Trim(strings.TrimSpace(value), "\""), "Ff")
+		}
+	}
+	return ""
 }
 
 func splitATLines(resp string) []string {
@@ -1297,6 +1505,40 @@ func parseUSBATQNWInfo(resp string) (mode, duplex, band string, channel uint32) 
 		channel = uint32(value)
 	}
 	return mode, duplex, band, channel
+}
+
+func parseUSBATCOPSMode(resp string) string {
+	re := regexp.MustCompile(`\+COPS:\s*\d+(?:,\d+,"[^"]*")?,(\d+)`)
+	match := re.FindStringSubmatch(resp)
+	if len(match) != 2 {
+		return ""
+	}
+	switch match[1] {
+	case "0":
+		return "GSM"
+	case "2":
+		return "WCDMA"
+	case "7":
+		return "LTE"
+	case "10":
+		return "NR"
+	default:
+		return ""
+	}
+}
+
+func parseModuleUSBMode(resp string, family modem.ATFamily) (int, bool) {
+	if family == modem.ATFamilyAirM2M {
+		re := regexp.MustCompile(`(?im)^\s*mode:\s*(\d+)\s*$`)
+		match := re.FindStringSubmatch(strings.ReplaceAll(resp, "\r", ""))
+		if len(match) != 2 {
+			return -1, false
+		}
+		mode, err := strconv.Atoi(match[1])
+		return mode, err == nil
+	}
+	mode, err := strconv.Atoi(parseUSBNetMode(resp))
+	return mode, err == nil
 }
 
 func (a *app) readUSBATSMS() ([]receivedSMS, error) {
@@ -1457,6 +1699,9 @@ func (a *app) listSMS(w http.ResponseWriter, _ *http.Request) {
 	a.smsMu.RLock()
 	items := append([]receivedSMS(nil), a.sms...)
 	a.smsMu.RUnlock()
+	for index := range items {
+		items[index].Direction = smsDirection(items[index])
+	}
 	if items == nil {
 		items = []receivedSMS{}
 	}
@@ -1575,13 +1820,15 @@ func (a *app) sendSMS(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if strings.TrimSpace(body.Phone) == "" || strings.TrimSpace(body.Message) == "" {
+	body.Phone = strings.TrimSpace(body.Phone)
+	body.Message = strings.TrimSpace(body.Message)
+	if body.Phone == "" || body.Message == "" {
 		writeError(w, http.StatusBadRequest, "phone and message are required")
 		return
 	}
 	if a.demo {
-		a.mergeSMS([]receivedSMS{{Sender: "已发送至 " + body.Phone, Content: body.Message, Timestamp: time.Now()}}, false)
-		writeJSON(w, http.StatusOK, map[string]any{"sent": true, "segments": 1})
+		message := a.recordSentSMS(body.Phone, body.Message, time.Now())
+		writeJSON(w, http.StatusOK, map[string]any{"sent": true, "segments": 1, "message": message})
 		return
 	}
 	segments, err := a.sendTextSMS(body.Phone, body.Message)
@@ -1589,7 +1836,8 @@ func (a *app) sendSMS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sent": true, "segments": segments})
+	message := a.recordSentSMS(body.Phone, body.Message, time.Now())
+	writeJSON(w, http.StatusOK, map[string]any{"sent": true, "segments": segments, "message": message})
 }
 
 func (a *app) sendTextSMS(phone, message string) (int, error) {
@@ -1690,12 +1938,16 @@ func (a *app) networkDiagnostic(w http.ResponseWriter, _ *http.Request) {
 	}()
 	raw := make(map[string]string)
 	errs := make(map[string]string)
+	profile := a.moduleATProfile()
 	diag := networkDiagnostic{
-		USBDevice:     a.currentUSBDevice(),
-		MacInterfaces: discoverMacNetworkInterfaces(),
-		DefaultRoute:  discoverMacDefaultRoute(),
-		Raw:           raw,
-		Errors:        errs,
+		ModuleFamily:        profile.Family,
+		FirmwareFlavor:      profile.Flavor,
+		USBNetworkSupported: profile.SupportsUSBNetwork(),
+		USBDevice:           a.currentUSBDevice(),
+		MacInterfaces:       discoverMacNetworkInterfaces(),
+		DefaultRoute:        discoverMacDefaultRoute(),
+		Raw:                 raw,
+		Errors:              errs,
 	}
 	hardwarePorts, hardwarePortsErr := a.currentMacHardwarePorts()
 	diag.USBNetworkPresent = selectUSBTrafficInterface(diag.MacInterfaces, diag.DefaultRoute, hardwarePorts) != ""
@@ -1704,11 +1956,17 @@ func (a *app) networkDiagnostic(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	commands := map[string]string{
-		"usbnet":  `AT+QCFG="usbnet"`,
-		"usbcfg":  `AT+QCFG="usbcfg"`,
 		"cgdcont": `AT+CGDCONT?`,
 		"cgact":   `AT+CGACT?`,
 		"cgpaddr": `AT+CGPADDR=1`,
+	}
+	if !diag.USBNetworkSupported {
+		// LSAT/AUAT intentionally have no USB network composition.
+	} else if diag.ModuleFamily == modem.ATFamilyAirM2M {
+		commands["usbnet"] = "AT+SETUSB?"
+	} else {
+		commands["usbnet"] = `AT+QCFG="usbnet"`
+		commands["usbcfg"] = `AT+QCFG="usbcfg"`
 	}
 	for key, command := range commands {
 		resp, err := a.runATCommand(command, 8*time.Second)
@@ -1719,7 +1977,13 @@ func (a *app) networkDiagnostic(w http.ResponseWriter, _ *http.Request) {
 		raw[key] = resp
 	}
 
-	diag.USBNetMode = parseUSBNetMode(raw["usbnet"])
+	if diag.ModuleFamily == modem.ATFamilyAirM2M {
+		if mode, err := parseSETUSBMode(raw["usbnet"]); err == nil {
+			diag.USBNetMode = strconv.Itoa(mode)
+		}
+	} else {
+		diag.USBNetMode = parseUSBNetMode(raw["usbnet"])
+	}
 	diag.USBCfg = parseUSBATPrefixed(raw["usbcfg"], "+QCFG:")
 	diag.PDPContexts = parsePDPContexts(raw["cgdcont"])
 	diag.ActiveContexts = parseActivePDPContexts(raw["cgact"])
@@ -1871,26 +2135,49 @@ func (a *app) setUSBNetMode(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Mode < 0 || body.Mode > 3 {
+	profile := a.moduleATProfile()
+	family := profile.Family
+	if !profile.SupportsUSBNetwork() {
+		writeError(w, http.StatusConflict, fmt.Sprintf("Air780 %s firmware does not provide a USB network interface", profile.Flavor))
+		return
+	}
+	if family == modem.ATFamilyAirM2M && body.Mode != 1 && body.Mode != 2 {
+		writeError(w, http.StatusBadRequest, "Air780 only supports SETUSB mode 1 (RNDIS) or 2 (ECM)")
+		return
+	}
+	if family != modem.ATFamilyAirM2M && (body.Mode < 0 || body.Mode > 3) {
 		writeError(w, http.StatusBadRequest, "only usbnet mode 0, 1, 2 or 3 is allowed")
 		return
 	}
-	command := fmt.Sprintf(`AT+QCFG="usbnet",%d`, body.Mode)
-	response, err := a.runATCommand(command, 8*time.Second)
+	var previous int
+	var changed bool
+	var response string
+	var err error
+	if family == modem.ATFamilyAirM2M {
+		previous, changed, response, err = setSETUSBModeWithVerification(a.runATCommand, body.Mode, 3)
+	} else {
+		previous, changed, response, err = setQCFGIntWithVerification(a.runATCommand, "usbnet", body.Mode, 3)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mode":         body.Mode,
-		"response":     response,
-		"needs_reboot": true,
+		"mode":          body.Mode,
+		"previous_mode": previous,
+		"changed":       changed,
+		"response":      response,
+		"needs_reboot":  changed,
 	})
 }
 
 func (a *app) rebootModule(w http.ResponseWriter, _ *http.Request) {
-	response, err := a.runATCommand("AT+CFUN=1,1", 3*time.Second)
-	if err != nil {
+	command := "AT+CFUN=1,1"
+	if a.moduleATFamily() == modem.ATFamilyAirM2M {
+		command = "AT+RESET"
+	}
+	response, err := a.runATCommand(command, 3*time.Second)
+	if err != nil && !isExpectedModemResetError(err) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -2083,9 +2370,11 @@ func parseMacHardwarePorts(out string) []macHardwarePort {
 	return ports
 }
 
-func isDJIUSBHardwarePort(name string) bool {
+func isSupportedModuleUSBHardwarePort(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	return strings.Contains(name, "baiwang") || strings.Contains(name, "dji")
+	return strings.Contains(name, "baiwang") || strings.Contains(name, "dji") ||
+		strings.Contains(name, "airm2m") || strings.Contains(name, "air780") ||
+		strings.Contains(name, "openluat") || strings.Contains(name, "eigencomm")
 }
 
 func selectUSBTrafficInterface(interfaces []macNetInterface, route macDefaultRoute, hardwarePorts []macHardwarePort) string {
@@ -2095,7 +2384,7 @@ func selectUSBTrafficInterface(interfaces []macNetInterface, route macDefaultRou
 	}
 	var candidates []string
 	for _, port := range hardwarePorts {
-		if isDJIUSBHardwarePort(port.Name) && active[port.Device] {
+		if isSupportedModuleUSBHardwarePort(port.Name) && active[port.Device] {
 			candidates = append(candidates, port.Device)
 		}
 	}
@@ -2146,7 +2435,7 @@ func (a *app) loadProfileNotesLocked() error {
 		if err != nil {
 			return fmt.Errorf("locate profile notes directory: %w", err)
 		}
-		path = filepath.Join(configDir, "DJSMSForward", "profile-notes.json")
+		path = filepath.Join(configDir, "ModemCat", "profile-notes.json")
 		a.profileNotesPath = path
 	}
 	notes := make(map[string]profileNote)

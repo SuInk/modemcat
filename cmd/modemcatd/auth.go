@@ -20,7 +20,7 @@ import (
 
 const (
 	authConfigVersion = 1
-	authCookieName    = "djsmsforward_session"
+	authCookieName    = "modemcat_session"
 	authSessionTTL    = 24 * time.Hour
 	maxAuthSessions   = 32
 )
@@ -68,7 +68,7 @@ func authConfigFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJSMSForward", "auth.json"), nil
+	return filepath.Join(dir, "ModemCat", "auth.json"), nil
 }
 
 func (a *app) initAuth() {
@@ -405,7 +405,7 @@ func (s *authService) middleware(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		r.Header.Set("X-DJSMSForward-Username", username)
+		r.Header.Set("X-ModemCat-Username", username)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -422,7 +422,7 @@ func serveLoginPage(w http.ResponseWriter, _ *http.Request) {
 
 func (a *app) authStatus(w http.ResponseWriter, r *http.Request) {
 	if a.auth == nil || a.auth.loadError != nil {
-		writeError(w, http.StatusServiceUnavailable, "账号服务不可用，请检查 DJSMSForward 日志")
+		writeError(w, http.StatusServiceUnavailable, "账号服务不可用，请检查 ModemCat 日志")
 		return
 	}
 	username, authenticated := a.auth.sessionUsername(r)

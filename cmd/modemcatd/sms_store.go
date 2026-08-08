@@ -27,7 +27,7 @@ func smsInboxFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "DJSMSForward", "sms-inbox.json"), nil
+	return filepath.Join(dir, "ModemCat", "sms-inbox.json"), nil
 }
 
 func loadSMSInbox(path string) ([]receivedSMS, error) {
@@ -68,8 +68,11 @@ func loadSMSInbox(path string) ([]receivedSMS, error) {
 		if message.Timestamp.IsZero() {
 			return nil, fmt.Errorf("SMS inbox message %d has no timestamp", i)
 		}
-		if len(message.Sender) > 1024 || len(message.Content) > 1<<20 || len(message.Code) > 256 {
+		if len(message.Sender) > 1024 || len(message.Recipient) > 1024 || len(message.Direction) > 32 || len(message.Content) > 1<<20 || len(message.Code) > 256 {
 			return nil, fmt.Errorf("SMS inbox message %d is too large", i)
+		}
+		if direction := strings.TrimSpace(message.Direction); direction != "" && direction != "incoming" && direction != "outgoing" {
+			return nil, fmt.Errorf("SMS inbox message %d has invalid direction", i)
 		}
 	}
 	return normalizeSMSInbox(stored.Messages), nil
@@ -132,6 +135,7 @@ func normalizeSMSInbox(messages []receivedSMS) []receivedSMS {
 		if message.Timestamp.IsZero() {
 			continue
 		}
+		message.Direction = smsDirection(message)
 		if message.Code == "" {
 			message.Code = extractSMSCode(message.Content)
 		}

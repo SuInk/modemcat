@@ -16,10 +16,10 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
-	"github.com/SuInk/djsmsforward/internal/config"
-	"github.com/SuInk/djsmsforward/pkg/logger"
-	"github.com/SuInk/djsmsforward/pkg/smscodec"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
+	"github.com/SuInk/modemcat/internal/config"
+	"github.com/SuInk/modemcat/pkg/logger"
+	"github.com/SuInk/modemcat/pkg/smscodec"
 	"github.com/warthog618/sms/encoding/gsm7"
 
 	"go.bug.st/serial"
@@ -101,6 +101,10 @@ type Manager struct {
 	networkMode   string // 网络模式 (LTE/WCDMA/GSM等)
 	networkDuplex string // 网络双工方式 (FDD/TDD)
 	usbnetMode    int    // USBNET 模式 (0: QMI, 1: ECM)
+	atProfile     ATProfile
+
+	smsReachable   bool   // 短信是否有投递通路 (CS 域已注册 或 IMS 提供 VoLTE 能力)
+	smsUnreachable string // 不可达时的原因与修复建议，可直接展示
 
 	infoMu sync.RWMutex
 
@@ -865,7 +869,6 @@ func (m *Manager) initModem() {
 		"AT+CMGF=0",         // PDU 模式
 		"AT+CNMI=2,1,0,0,0", // 新短信上报 +CMTI
 		"AT+CLIP=1",         // 启用来电号码显示 (+CLIP URC)
-		"AT+QPCMV=1,2",      // 开启 UAC 语音模式 (PCM → ALSA 桥接必须)
 	}
 
 	for _, cmd := range initCmds {
@@ -874,7 +877,31 @@ func (m *Manager) initModem() {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	identityParts := make([]string, 0, 4)
+	for _, cmd := range []string{"ATI", "AT+CGMI", "AT+CGMM", "AT+CGMR"} {
+		if response, probeErr := m.ExecuteATSilent(cmd, 2*time.Second); probeErr == nil {
+			identityParts = append(identityParts, response)
+		}
+	}
+	profile := DetectATProfile(strings.Join(identityParts, "\n"))
+	if profile.Family == ATFamilyAirM2M && profile.Flavor == "" {
+		if response, probeErr := m.ExecuteATSilent("AT+VER", 2*time.Second); probeErr == nil {
+			identityParts = append(identityParts, response)
+			profile = DetectATProfile(strings.Join(identityParts, "\n"))
+		}
+	}
+	m.infoMu.Lock()
+	m.atProfile = profile
+	m.infoMu.Unlock()
+	if profile.Family == ATFamilyQuectel {
+		// QPCMV is vendor-specific. Enabling it on Air780 produces ERROR on every
+		// startup and some old LSAT firmware takes several seconds to recover.
+		_, _ = m.ExecuteATSilent("AT+QPCMV=1,2", 2*time.Second)
+	}
+
 	m.markReady()
+
+	m.checkSMSReachability()
 
 	// 3. 采集设备信息
 	m.collectDeviceInfo()
@@ -1111,64 +1138,85 @@ type SIMServiceTable struct {
 
 // GetFullStatus 返回完整状态信息
 type DeviceStatus struct {
-	IMEI            string           `json:"imei"`
-	Firmware        string           `json:"firmware"`
-	ICCID           string           `json:"iccid"`
-	IMSI            string           `json:"imsi"`
-	NativeSPN       string           `json:"native_spn,omitempty"`
-	NativeMCC       string           `json:"native_mcc,omitempty"`
-	NativeMNC       string           `json:"native_mnc,omitempty"`
-	GID1            string           `json:"gid1,omitempty"`
-	GID2            string           `json:"gid2,omitempty"`
-	PNN             []PNNRecord      `json:"pnn,omitempty"`
-	OPL             []OPLRecord      `json:"opl,omitempty"`
-	SIMServiceTable *SIMServiceTable `json:"sim_service_table,omitempty"`
-	Operator        string           `json:"operator"`
-	SimInserted     bool             `json:"sim_inserted"`
-	SignalDBM       int              `json:"signal_dbm"`
-	SignalRSRP      int              `json:"signal_rsrp"`
-	SignalRSRQ      int              `json:"signal_rsrq"`
-	SignalSINR      int              `json:"signal_sinr,omitempty"`
-	NR5GSignalSINR  int              `json:"nr5g_signal_sinr,omitempty"`
-	RadioBand       string           `json:"radio_band,omitempty"`
-	RadioChannel    uint32           `json:"radio_channel,omitempty"`
-	RegStatus       int              `json:"reg_status"`
-	RegStatusText   string           `json:"reg_status_text"`
-	PSAttached      bool             `json:"ps_attached"`
-	LAC             string           `json:"lac"`
-	CellID          string           `json:"cell_id"`
-	APN             string           `json:"apn"`
-	IMSStatus       int              `json:"ims_status"`
-	NetworkMode     string           `json:"network_mode"`
-	NetworkDuplex   string           `json:"network_duplex"`
-	USBNetMode      int              `json:"usbnet_mode"`
-	OperatingMode   *int             `json:"operating_mode,omitempty"`
+	IMEI                string           `json:"imei"`
+	Firmware            string           `json:"firmware"`
+	ICCID               string           `json:"iccid"`
+	IMSI                string           `json:"imsi"`
+	NativeSPN           string           `json:"native_spn,omitempty"`
+	NativeMCC           string           `json:"native_mcc,omitempty"`
+	NativeMNC           string           `json:"native_mnc,omitempty"`
+	GID1                string           `json:"gid1,omitempty"`
+	GID2                string           `json:"gid2,omitempty"`
+	PNN                 []PNNRecord      `json:"pnn,omitempty"`
+	OPL                 []OPLRecord      `json:"opl,omitempty"`
+	SIMServiceTable     *SIMServiceTable `json:"sim_service_table,omitempty"`
+	Operator            string           `json:"operator"`
+	SimInserted         bool             `json:"sim_inserted"`
+	SignalDBM           int              `json:"signal_dbm"`
+	SignalRSRP          int              `json:"signal_rsrp"`
+	SignalRSRQ          int              `json:"signal_rsrq"`
+	SignalSINR          int              `json:"signal_sinr,omitempty"`
+	NR5GSignalSINR      int              `json:"nr5g_signal_sinr,omitempty"`
+	RadioBand           string           `json:"radio_band,omitempty"`
+	RadioChannel        uint32           `json:"radio_channel,omitempty"`
+	RegStatus           int              `json:"reg_status"`
+	RegStatusText       string           `json:"reg_status_text"`
+	PSAttached          bool             `json:"ps_attached"`
+	LAC                 string           `json:"lac"`
+	CellID              string           `json:"cell_id"`
+	APN                 string           `json:"apn"`
+	IMSStatus           int              `json:"ims_status"`
+	NetworkMode         string           `json:"network_mode"`
+	NetworkDuplex       string           `json:"network_duplex"`
+	USBNetMode          int              `json:"usbnet_mode"`
+	OperatingMode       *int             `json:"operating_mode,omitempty"`
+	ModuleFamily        ATFamily         `json:"module_family,omitempty"`
+	FirmwareFlavor      string           `json:"firmware_flavor,omitempty"`
+	ModuleModel         string           `json:"module_model,omitempty"`
+	USBNetworkSupported bool             `json:"usb_network_supported"`
+
+	// 短信通路。与数据是否可用无关：LTE 下短信要么走 CSFB（需 CS 域注册），
+	// 要么走 SMS over IMS（需 IMS 注册），两者都不成立时数据依旧完全正常。
+	SMSReachable bool   `json:"sms_reachable"`
+	SMSDetail    string `json:"sms_detail,omitempty"`
 }
 
 func (m *Manager) GetFullStatus() DeviceStatus {
 	m.infoMu.RLock()
 	defer m.infoMu.RUnlock()
 	return DeviceStatus{
-		IMEI:          m.imei,
-		Firmware:      m.firmware,
-		ICCID:         m.iccid,
-		IMSI:          m.imsi,
-		Operator:      m.operator,
-		SimInserted:   m.simInserted,
-		SignalDBM:     m.signalDBM,
-		SignalRSRP:    m.signalRSRP,
-		SignalRSRQ:    m.signalRSRQ,
-		RegStatus:     m.regStatus,
-		RegStatusText: m.regStatusText,
-		LAC:           m.lac,
-		CellID:        m.cellID,
-		APN:           m.apn,
-		IMSStatus:     m.imsStatus,
-		NetworkMode:   m.networkMode,
-		NetworkDuplex: m.networkDuplex,
-		USBNetMode:    m.usbnetMode,
-		OperatingMode: nil,
+		SMSReachable:        m.smsReachable,
+		SMSDetail:           m.smsUnreachable,
+		IMEI:                m.imei,
+		Firmware:            m.firmware,
+		ModuleFamily:        m.atProfile.Family,
+		FirmwareFlavor:      m.atProfile.Flavor,
+		ModuleModel:         m.atProfile.Model,
+		USBNetworkSupported: m.atProfile.SupportsUSBNetwork(),
+		ICCID:               m.iccid,
+		IMSI:                m.imsi,
+		Operator:            m.operator,
+		SimInserted:         m.simInserted,
+		SignalDBM:           m.signalDBM,
+		SignalRSRP:          m.signalRSRP,
+		SignalRSRQ:          m.signalRSRQ,
+		RegStatus:           m.regStatus,
+		RegStatusText:       m.regStatusText,
+		LAC:                 m.lac,
+		CellID:              m.cellID,
+		APN:                 m.apn,
+		IMSStatus:           m.imsStatus,
+		NetworkMode:         m.networkMode,
+		NetworkDuplex:       m.networkDuplex,
+		USBNetMode:          m.usbnetMode,
+		OperatingMode:       nil,
 	}
+}
+
+func (m *Manager) ATProfile() ATProfile {
+	m.infoMu.RLock()
+	defer m.infoMu.RUnlock()
+	return m.atProfile
 }
 
 // RefreshStatus 刷新设备状态 (信号、运营商、SIM)，并在发现 SIM 卡掉线时触发告警

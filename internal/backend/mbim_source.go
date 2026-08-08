@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/mbim"
 	"github.com/iniwex5/quectel-qmi-go/pkg/manager"
 )
 

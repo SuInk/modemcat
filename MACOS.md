@@ -1,11 +1,14 @@
-# DJSMSForward for macOS
+# ModemCat for macOS
 
 This branch adds a native macOS service for the DJI Cellular Dongle / Quectel
-EG25-G. It does not require UTM for AT-mode management.
+EG25-G and AirM2M Air780 firmware variants. It does not require UTM for AT-mode
+management.
 
 ## Current scope
 
-- Automatic discovery of DJI (`2ca3`) and Quectel (`2c7c`) USB serial ports
+- Automatic discovery of DJI (`2ca3`), Quectel (`2c7c`) and default Air780
+  (`19d1:0001`) USB interfaces and serial ports
+- Runtime detection of Air780 `_AT`, `_LSAT` and `_AUAT` firmware variants
 - Modem, SIM, operator, registration and signal status
 - Receive and send SMS through the modem AT port
 - Execute explicit AT commands
@@ -14,25 +17,25 @@ EG25-G. It does not require UTM for AT-mode management.
 - Packaged Apple Silicon release (Intel packaging is planned separately)
 
 The cellular data interface remains managed by macOS. This allows macOS to use
-the dongle as its network connection while DJSMSForward uses a separate USB serial
+the dongle as its network connection while ModemCat uses a separate USB serial
 interface for management.
 
 ## Downloaded release
 
 The Apple Silicon ZIP contains the executable, its libusb runtime, licenses and
-the `djsmsforward` terminal launcher. It does not require Go, Homebrew or a separately
+the `modemcat` terminal launcher. It does not require Go, Homebrew or a separately
 installed libusb on the user's Mac.
 
 From the extracted release directory:
 
 ```sh
-./djsmsforward start
+./modemcat start
 ```
 
 The terminal remains attached to the service and the management page opens
-automatically. Press `Control+C` to stop it, or run `./djsmsforward stop` from another
+automatically. Press `Control+C` to stop it, or run `./modemcat stop` from another
 terminal in the same directory. Logs are stored in
-`~/Library/Logs/DJSMSForward/djsmsforward.log`.
+`~/Library/Logs/ModemCat/modemcat.log`.
 
 ## Build from source
 
@@ -47,9 +50,9 @@ Requirements:
 
 Release outputs:
 
-- `dist/release/DJSMSForward-macOS-arm64-v0.1.0-preview/`
-- `dist/release/DJSMSForward-macOS-arm64-v0.1.0-preview.zip`
-- `dist/release/DJSMSForward-macOS-arm64-v0.1.0-preview.zip.sha256`
+- `dist/release/ModemCat-macOS-arm64-v0.1.0-preview/`
+- `dist/release/ModemCat-macOS-arm64-v0.1.0-preview.zip`
+- `dist/release/ModemCat-macOS-arm64-v0.1.0-preview.zip.sha256`
 
 The packaging script downloads the official libusb source archive, verifies its
 SHA-256, builds it for macOS 13 or newer and bundles the resulting runtime.
@@ -59,13 +62,13 @@ SHA-256, builds it for macOS 13 or newer and bundles the resulting runtime.
 Connect the modem and run:
 
 ```sh
-./dist/djsmsforward-macos
+./dist/modemcat-macos
 ```
 
 If automatic discovery picks no AT port, inspect `/dev/cu.*` and pass it:
 
 ```sh
-./dist/djsmsforward-macos -port /dev/cu.usbmodemXXXX
+./dist/modemcat-macos -port /dev/cu.usbmodemXXXX
 ```
 
 The server only listens on localhost by default. Open:
@@ -79,7 +82,7 @@ http://127.0.0.1:7575
 To explore the management page before buying the module, run:
 
 ```sh
-./dist/djsmsforward-macos -demo
+./dist/modemcat-macos -demo
 ```
 
 Then open `http://127.0.0.1:7575`. Demo mode provides simulated modem status,
@@ -92,7 +95,7 @@ SIM, send messages or switch a physical eSIM profile.
 ./scripts/install-macos.sh
 ```
 
-Logs are written to `~/Library/Logs/DJSMSForward`.
+Logs are written to `~/Library/Logs/ModemCat`.
 
 ## Platform limitations
 

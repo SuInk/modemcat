@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SuInk/djsmsforward/internal/apduarbiter"
+	"github.com/SuInk/modemcat/internal/apduarbiter"
 )
 
 type fakeUICC struct {

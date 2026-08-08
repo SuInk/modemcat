@@ -3,7 +3,7 @@ package backend
 import (
 	"context"
 
-	"github.com/SuInk/djsmsforward/pkg/mbim"
+	"github.com/SuInk/modemcat/pkg/mbim"
 )
 
 func (b *MBIMBackend) ScanOperators(ctx context.Context) ([]OperatorCandidate, error) {

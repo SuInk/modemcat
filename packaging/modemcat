@@ -11,32 +11,32 @@ while [ -L "${SOURCE}" ]; do
   esac
 done
 ROOT_DIR=$(CDPATH= cd -P -- "$(dirname -- "${SOURCE}")" && pwd)
-BINARY="${ROOT_DIR}/bin/djsmsforward-macos"
+BINARY="${ROOT_DIR}/bin/modemcat-macos"
 URL="http://127.0.0.1:7575"
-DATA_DIR="${HOME}/Library/Application Support/DJSMSForward"
-LOG_DIR="${HOME}/Library/Logs/DJSMSForward"
-PID_FILE="${DATA_DIR}/djsmsforward.pid"
-LOG_FILE="${LOG_DIR}/djsmsforward.log"
+DATA_DIR="${HOME}/Library/Application Support/ModemCat"
+LOG_DIR="${HOME}/Library/Logs/ModemCat"
+PID_FILE="${DATA_DIR}/modemcat.pid"
+LOG_FILE="${LOG_DIR}/modemcat.log"
 PUBLIC_ORIGIN_FILE="${DATA_DIR}/public-origin"
-LAUNCH_AGENT_LABEL="com.djsmsforward.webui"
+LAUNCH_AGENT_LABEL="com.modemcat.webui"
 LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
 usage() {
   cat <<'EOF'
-DJSMSForward for macOS
+ModemCat for macOS
 
 用法：
-  djsmsforward start          启动并自动打开管理网页
-  djsmsforward start --demo   启动无硬件演示模式
-  djsmsforward stop           停止正在运行的程序
-  djsmsforward status         查看运行状态
-  djsmsforward logs           查看实时日志（Ctrl+C 退出日志）
-  djsmsforward open           打开管理网页
-  djsmsforward cloudflare URL 设置允许的 Cloudflare HTTPS 域名
-  djsmsforward cloudflare off 关闭 Cloudflare 公网来源
-  djsmsforward service install 安装并启动登录后自动运行的后台服务
-  djsmsforward service remove  停止并移除后台服务
-  djsmsforward service status  查看后台服务状态
+  modemcat start          启动并自动打开管理网页
+  modemcat start --demo   启动无硬件演示模式
+  modemcat stop           停止正在运行的程序
+  modemcat status         查看运行状态
+  modemcat logs           查看实时日志（Ctrl+C 退出日志）
+  modemcat open           打开管理网页
+  modemcat cloudflare URL 设置允许的 Cloudflare HTTPS 域名
+  modemcat cloudflare off 关闭 Cloudflare 公网来源
+  modemcat service install 安装并启动登录后自动运行的后台服务
+  modemcat service remove  停止并移除后台服务
+  modemcat service status  查看后台服务状态
 EOF
 }
 
@@ -52,7 +52,7 @@ is_running() {
   kill -0 "${pid}" 2>/dev/null || return 1
   command_line=$(ps -p "${pid}" -o command= 2>/dev/null || true)
   case "${command_line}" in
-    */bin/djsmsforward-macos*) return 0 ;;
+    */bin/modemcat-macos*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -68,7 +68,7 @@ launch_agent_loaded() {
 }
 
 open_page() {
-  if [ "${DJSMSFORWARD_NO_OPEN:-0}" = "1" ]; then
+  if [ "${MODEMCAT_NO_OPEN:-0}" = "1" ]; then
     return 0
   fi
   open "${URL}" >/dev/null 2>&1 || {
@@ -93,13 +93,13 @@ start_service() {
   fi
   clean_stale_pid
   if launch_agent_loaded; then
-    printf 'DJSMSForward 后台服务已启用，正在打开管理网页。\n'
+    printf 'ModemCat 后台服务已启用，正在打开管理网页。\n'
     launchctl kickstart "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
     open_page
     exit 0
   fi
   if is_running; then
-    printf 'DJSMSForward 已在运行，正在打开管理网页。\n'
+    printf 'ModemCat 已在运行，正在打开管理网页。\n'
     open_page
     exit 0
   fi
@@ -129,7 +129,7 @@ start_service() {
   stop_child() {
     if [ "${stopping}" -eq 0 ]; then
       stopping=1
-      printf '\n正在停止 DJSMSForward...\n'
+      printf '\n正在停止 ModemCat...\n'
       kill -TERM "${child}" 2>/dev/null || true
     fi
   }
@@ -151,21 +151,21 @@ start_service() {
   done
 
   if [ "${ready}" -eq 1 ]; then
-    printf 'DJSMSForward 已启动：%s\n' "${URL}"
+    printf 'ModemCat 已启动：%s\n' "${URL}"
     printf '日志文件：%s\n' "${LOG_FILE}"
     printf '按 Ctrl+C 即可停止。\n'
     open_page
   else
-    printf 'DJSMSForward 未能正常启动，请查看日志：%s\n' "${LOG_FILE}" >&2
+    printf 'ModemCat 未能正常启动，请查看日志：%s\n' "${LOG_FILE}" >&2
   fi
 
   wait "${child}"
   status=$?
   trap - INT TERM HUP
   if [ "${stopping}" -eq 0 ] && [ "${status}" -ne 0 ]; then
-    printf 'DJSMSForward 异常退出（状态码 %s），请查看日志：%s\n' "${status}" "${LOG_FILE}" >&2
+    printf 'ModemCat 异常退出（状态码 %s），请查看日志：%s\n' "${status}" "${LOG_FILE}" >&2
   else
-    printf 'DJSMSForward 已停止。\n'
+    printf 'ModemCat 已停止。\n'
   fi
   exit "${status}"
 }
@@ -198,7 +198,7 @@ install_launch_agent() {
       sleep 0.1
     done
     if kill -0 "${foreground_pid}" 2>/dev/null; then
-      printf '安装后台服务失败：前台 DJSMSForward 尚未退出。\n' >&2
+      printf '安装后台服务失败：前台 ModemCat 尚未退出。\n' >&2
       exit 1
     fi
     rm -f "${PID_FILE}"
@@ -225,7 +225,7 @@ install_launch_agent() {
   attempts=0
   while [ "${attempts}" -lt 50 ]; do
     if /usr/bin/curl -fsS --max-time 1 "${URL}/api/health" >/dev/null 2>&1; then
-      printf 'DJSMSForward 后台服务已安装并启动：%s\n' "${URL}"
+      printf 'ModemCat 后台服务已安装并启动：%s\n' "${URL}"
       return
     fi
     attempts=$((attempts + 1))
@@ -238,27 +238,27 @@ install_launch_agent() {
 remove_launch_agent() {
   launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
   rm -f "${LAUNCH_AGENT}"
-  printf 'DJSMSForward 后台服务已停止并移除。\n'
+  printf 'ModemCat 后台服务已停止并移除。\n'
 }
 
 show_launch_agent_status() {
   if ! launch_agent_loaded; then
-    printf 'DJSMSForward 后台服务尚未安装或没有运行。\n'
+    printf 'ModemCat 后台服务尚未安装或没有运行。\n'
     return
   fi
   service_pid=$(launchctl print "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" 2>/dev/null | awk '/pid =/ { print $3; exit }')
   if [ -n "${service_pid}" ]; then
-    printf 'DJSMSForward 后台服务正在运行（PID %s）\n' "${service_pid}"
+    printf 'ModemCat 后台服务正在运行（PID %s）\n' "${service_pid}"
     printf '管理网页：%s\n' "${URL}"
   else
-    printf 'DJSMSForward 后台服务已加载，正在等待启动。\n'
+    printf 'ModemCat 后台服务已加载，正在等待启动。\n'
   fi
 }
 
 configure_cloudflare() {
   origin=${1:-}
   if [ -z "${origin}" ]; then
-    printf '请提供完整 HTTPS 域名，例如：https://djsmsforward.example.com\n' >&2
+    printf '请提供完整 HTTPS 域名，例如：https://modemcat.example.com\n' >&2
     exit 2
   fi
   mkdir -p "${DATA_DIR}"
@@ -269,7 +269,7 @@ configure_cloudflare() {
       launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
       printf 'Cloudflare 公网来源已关闭，后台服务已重启。\n'
     else
-      printf 'Cloudflare 公网来源已关闭；重启 DJSMSForward 后生效。\n'
+      printf 'Cloudflare 公网来源已关闭；重启 ModemCat 后生效。\n'
     fi
     return
   fi
@@ -288,19 +288,19 @@ configure_cloudflare() {
     launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
     printf 'Cloudflare 公网来源已设置为 %s，后台服务已重启。\n' "${origin}"
   else
-    printf 'Cloudflare 公网来源已设置为 %s；重启 DJSMSForward 后生效。\n' "${origin}"
+    printf 'Cloudflare 公网来源已设置为 %s；重启 ModemCat 后生效。\n' "${origin}"
   fi
 }
 
 stop_service() {
   if launch_agent_loaded; then
     launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
-    printf 'DJSMSForward 后台服务已停止；执行 djsmsforward service install 可重新启用。\n'
+    printf 'ModemCat 后台服务已停止；执行 modemcat service install 可重新启用。\n'
     exit 0
   fi
   clean_stale_pid
   if ! is_running; then
-    printf 'DJSMSForward 当前没有运行。\n'
+    printf 'ModemCat 当前没有运行。\n'
     exit 0
   fi
   pid=$(read_pid)
@@ -311,11 +311,11 @@ stop_service() {
     sleep 0.1
   done
   if kill -0 "${pid}" 2>/dev/null; then
-    printf 'DJSMSForward 尚未退出，请回到启动它的终端按 Ctrl+C。\n' >&2
+    printf 'ModemCat 尚未退出，请回到启动它的终端按 Ctrl+C。\n' >&2
     exit 1
   fi
   rm -f "${PID_FILE}"
-  printf 'DJSMSForward 已停止。\n'
+  printf 'ModemCat 已停止。\n'
 }
 
 show_status() {
@@ -325,10 +325,10 @@ show_status() {
   fi
   clean_stale_pid
   if is_running; then
-    printf 'DJSMSForward 正在运行（PID %s）\n' "$(read_pid)"
+    printf 'ModemCat 正在运行（PID %s）\n' "$(read_pid)"
     printf '管理网页：%s\n' "${URL}"
   else
-    printf 'DJSMSForward 当前没有运行。\n'
+    printf 'ModemCat 当前没有运行。\n'
   fi
 }
 

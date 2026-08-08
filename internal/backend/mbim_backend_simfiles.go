@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/SuInk/djsmsforward/internal/modem"
+	"github.com/SuInk/modemcat/internal/modem"
 )
 
 // SIM EF file identifiers (3GPP TS 31.102 / 51.011).
