@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · ModemCat WebUI</title>
+  <script>
+    try {
+      const theme = localStorage.getItem("modemcat-theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    } catch (_) {}
+  </script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-page">
+  <main class="auth-shell">
+    <header class="auth-brand">
+      <svg class="brand-logo" viewBox="0 0 96 96" width="52" height="52" aria-hidden="true">
+        <path d="M18 12C15.6 30 14 36.5 14 48c0 21.5 13.5 34 34 34s34-12.5 34-34c0-11.5-1.6-18-4-36-6.2 8.4-12.3 13.2-18.4 15.2C56 25.9 52 25.1 48 25.1s-8 .8-11.6 1.9C30.3 25 24.2 20.2 18 12Z"/>
+        <circle cx="35" cy="47" r="6.8"/><circle cx="61" cy="47" r="6.8"/>
+        <rect x="39" y="59" width="18" height="12.5" rx="3"/>
+      </svg>
+      <h1>ModemCat <span>LOCAL MODEM CONTROL</span></h1>
+    </header>
+    <section class="auth-panel">
+      <h2 id="auth-title">正在检查账号</h2>
+      <p id="auth-subtitle">本机管理后台</p>
+      <form id="auth-form" class="auth-form" hidden>
+        <label>
+          <span>账号</span>
+          <input id="auth-username" name="username" maxlength="64" required>
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="auth-password" name="password" type="password" maxlength="72" required>
+        </label>
+        <label id="auth-confirm-row" hidden>
+          <span>确认密码</span>
+          <input id="auth-confirm" name="confirm_password" type="password" maxlength="72">
+        </label>
+        <button id="auth-submit" type="submit">登录</button>
+      </form>
+      <p id="auth-error" class="auth-error" role="alert" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="/login.js"></script>
+</body>
+</html>

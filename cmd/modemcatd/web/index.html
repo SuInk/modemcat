@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ModemCat</title>
+  <script>
+    try {
+      const theme = localStorage.getItem("modemcat-theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    } catch (_) {}
+  </script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <a class="brand-block" href="/" aria-label="ModemCat 概览">
+        <svg class="brand-logo" viewBox="0 0 96 96" aria-hidden="true">
+          <path d="M18 12C15.6 30 14 36.5 14 48c0 21.5 13.5 34 34 34s34-12.5 34-34c0-11.5-1.6-18-4-36-6.2 8.4-12.3 13.2-18.4 15.2C56 25.9 52 25.1 48 25.1s-8 .8-11.6 1.9C30.3 25 24.2 20.2 18 12Z"/>
+          <circle cx="35" cy="47" r="6.8"/><circle cx="61" cy="47" r="6.8"/>
+          <rect x="39" y="59" width="18" height="12.5" rx="3"/>
+        </svg>
+        <span>ModemCat</span>
+      </a>
+      <nav class="task-nav" aria-label="功能导航">
+        <button class="tab active" data-view="overview"><span>概览</span><small>设备状态</small></button>
+        <button class="tab" data-view="sms"><span>短信</span><small>收件箱与发送</small></button>
+        <button class="tab" data-view="calls"><span>通话</span><small>拨号与接听</small></button>
+        <button class="tab" data-view="scheduled"><span>定时任务</span><small>自动短信</small></button>
+        <button class="tab" data-view="notifications"><span>转发渠道</span><small>Bark / Telegram</small></button>
+        <span class="nav-divider" aria-hidden="true"></span>
+        <button class="tab" data-view="network"><span>模组与网络</span><small>USB / LTE</small></button>
+        <button class="tab" data-view="esim"><span>eSIM</span><small>Profile 管理</small></button>
+        <button class="tab" data-view="at"><span>AT 调试</span><small>高级诊断</small></button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="theme-switch" role="group" aria-label="网页外观">
+          <button class="theme-option" type="button" data-theme-option="light" aria-pressed="false">浅色</button>
+          <button class="theme-option" type="button" data-theme-option="dark" aria-pressed="false">深色</button>
+          <button class="theme-option" type="button" data-theme-option="auto" aria-pressed="true">自动</button>
+        </div>
+        <div class="sidebar-actions">
+          <button id="account-settings" class="secondary compact" type="button">账号</button>
+          <button id="logout" class="secondary compact" type="button">退出</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-workspace">
+      <header class="app-header">
+        <div>
+		  <p class="page-kicker">MODEMCAT CELLULAR CONTROL</p>
+          <h1 id="page-title">概览</h1>
+        </div>
+        <div class="header-status">
+		  <span class="connection-chip"><i></i><span id="device-summary">正在连接蜂窝模块</span></span>
+          <button id="refresh" class="compact icon-button" title="刷新状态" aria-label="刷新状态">↻</button>
+        </div>
+      </header>
+
+      <main class="app-main">
+        <section id="overview" class="view active">
+          <div class="overview device-card" aria-label="设备状态">
+            <div class="device-identity">
+			  <span id="module-name" class="device-name">蜂窝通信模块</span>
+			  <small id="module-detail">正在识别型号与固件</small>
+            </div>
+            <div class="device-metrics">
+              <div><strong id="signal">--</strong><span>RSSI</span></div>
+              <div><strong id="operator">--</strong><span>运营商</span></div>
+              <div><strong id="network-mode">--</strong><span>网络</span></div>
+              <div><strong id="sim">--</strong><span>SIM</span></div>
+            </div>
+            <div class="mode-switch" role="group" aria-label="工作模式">
+              <button id="workmode-sms" class="secondary compact" type="button">短信模式</button>
+              <button id="workmode-network" class="secondary compact" type="button">上网模式</button>
+            </div>
+          </div>
+          <div id="sms-reachability" class="reachability-alert" hidden>
+            <div>
+              <strong>短信通路需要处理</strong>
+              <p id="sms-reachability-detail"></p>
+            </div>
+            <button id="sms-reachability-reboot" class="secondary compact" type="button" hidden>重启模块</button>
+          </div>
+          <p id="workmode-status" class="inline-status" hidden></p>
+          <div class="status-tiles">
+            <div><span>工作模式</span><strong id="work-mode">--</strong><small>USB Composition</small></div>
+            <div><span>当前下载</span><strong id="traffic-rx-rate">--</strong><small>实时速率</small></div>
+            <div><span>当前上传</span><strong id="traffic-tx-rate">--</strong><small>实时速率</small></div>
+            <div><span>本次总流量</span><strong id="traffic-session-total">--</strong><small>当前进程</small></div>
+          </div>
+          <div class="traffic-secondary" hidden>
+            <strong id="traffic-session-rx">--</strong><strong id="traffic-session-tx">--</strong>
+          </div>
+          <section id="hardware-details" class="hardware-details" hidden></section>
+        </section>
+
+        <section id="calls" class="view">
+          <div class="view-intro call-view-intro">
+            <div><span class="section-kicker">VOICE CONTROL</span><h2>语音通话</h2></div>
+            <button id="refresh-calls" class="secondary compact" type="button">刷新状态</button>
+          </div>
+          <p id="call-monitor-status" class="inline-status">正在连接模块</p>
+          <div class="call-workspace">
+            <section class="call-primary" aria-live="polite">
+              <div id="active-call" class="call-live">
+                <span id="active-call-label">当前没有通话</span>
+                <strong id="active-call-number">--</strong>
+                <small id="active-call-time">可以拨打新号码</small>
+                <div class="call-live-actions">
+                  <button id="answer-call" type="button" hidden>接听</button>
+                  <button id="reject-call" class="danger" type="button" hidden>拒接</button>
+                  <button id="hangup-call" class="danger" type="button" hidden>挂断</button>
+                </div>
+              </div>
+              <form id="dial-form" class="dial-form">
+                <label for="dial-number">拨打号码</label>
+                <div>
+                  <input id="dial-number" type="tel" inputmode="tel" autocomplete="tel" placeholder="+44 7700 900123" required>
+                  <button id="dial-call" type="submit">拨号</button>
+                </div>
+              </form>
+            </section>
+            <aside class="call-tools">
+              <section class="dtmf-panel">
+                <div class="call-section-heading"><div><span class="section-kicker">DTMF</span><h2>按键</h2></div><small id="dtmf-status">通话接通后可用</small></div>
+                <div id="dtmf-keypad" class="dtmf-keypad" aria-label="DTMF 键盘">
+                  <button type="button" data-tone="1" disabled>1</button><button type="button" data-tone="2" disabled>2</button><button type="button" data-tone="3" disabled>3</button>
+                  <button type="button" data-tone="4" disabled>4</button><button type="button" data-tone="5" disabled>5</button><button type="button" data-tone="6" disabled>6</button>
+                  <button type="button" data-tone="7" disabled>7</button><button type="button" data-tone="8" disabled>8</button><button type="button" data-tone="9" disabled>9</button>
+                  <button type="button" data-tone="*" disabled>*</button><button type="button" data-tone="0" disabled>0</button><button type="button" data-tone="#" disabled>#</button>
+                </div>
+              </section>
+              <section class="call-audio-panel">
+                <div class="call-section-heading"><div><span class="section-kicker">AUDIO PATH</span><h2>音频通道</h2></div><button id="probe-call-audio" class="secondary compact" type="button">检测</button></div>
+                <strong id="call-audio-state">尚未检测</strong>
+                <p id="call-audio-detail">通话控制与声音传输独立检测。</p>
+                <div class="call-audio-actions">
+                  <button id="start-call-audio" type="button" disabled>启用浏览器音频</button>
+                  <button id="stop-call-audio" class="secondary" type="button" disabled>关闭</button>
+                </div>
+              </section>
+            </aside>
+          </div>
+          <section class="call-history-section">
+            <div class="section-heading"><h2>通话记录</h2><small id="call-history-count">0 条</small></div>
+            <div id="call-history" class="list empty">暂无记录</div>
+          </section>
+        </section>
+
+        <section id="sms" class="view">
+          <div class="view-intro sms-view-intro">
+            <div><span class="section-kicker">SIM MESSAGES</span><h2>短信对话</h2></div>
+            <div class="heading-actions">
+              <button id="clear-module-sms" class="secondary danger compact" type="button">清空模块 ME</button>
+              <button id="refresh-sms" class="secondary compact" type="button">刷新</button>
+            </div>
+          </div>
+          <p id="sms-status" class="inline-status">正在读取短信</p>
+          <div class="sms-workspace">
+            <aside class="conversation-panel" aria-label="短信会话">
+              <div class="conversation-panel-heading">
+                <strong>会话</strong>
+                <button id="new-conversation" class="secondary icon-button compact" type="button" title="新建短信" aria-label="新建短信">+</button>
+              </div>
+              <div id="sms-conversations" class="conversation-list empty">暂无会话</div>
+            </aside>
+            <section class="message-panel" aria-live="polite">
+              <div id="conversation-empty" class="conversation-empty">
+                <strong>选择一个联系人</strong>
+                <span>或新建短信开始对话</span>
+              </div>
+              <div id="conversation-view" class="conversation-view" hidden>
+                <header class="conversation-header">
+                  <button id="conversation-back" class="secondary icon-button compact" type="button" title="返回会话列表" aria-label="返回会话列表">‹</button>
+                  <div><strong id="conversation-contact"></strong><small id="conversation-count"></small></div>
+                </header>
+                <div id="sms-messages" class="message-stream"></div>
+                <form id="send-form" class="message-composer">
+                  <input id="phone" type="hidden">
+                  <textarea id="message" placeholder="输入短信" maxlength="1000" rows="2" required></textarea>
+                  <button type="submit">发送</button>
+                </form>
+              </div>
+            </section>
+          </div>
+        </section>
+
+    <section id="scheduled" class="view">
+      <div class="view-intro scheduled-view-intro">
+        <div><span class="section-kicker">SCHEDULED SMS</span><h2>定时任务</h2></div>
+        <button id="new-scheduled-task" type="button">新建任务</button>
+      </div>
+      <div class="section-heading compact-heading">
+        <div>
+          <h2>任务列表</h2>
+          <p id="scheduled-task-status" class="inline-status">正在读取任务</p>
+        </div>
+        <button id="refresh-scheduled-tasks" class="secondary compact" type="button">刷新</button>
+      </div>
+      <div id="scheduled-task-list" class="scheduled-task-grid empty">暂无任务</div>
+      <div class="section-heading">
+        <h2>执行历史</h2>
+        <small id="scheduled-history-count">0 条</small>
+      </div>
+      <div id="scheduled-run-list" class="list empty">暂无执行记录</div>
+    </section>
+
+    <section id="esim" class="view">
+      <div class="view-intro"><div><span class="section-kicker">EUICC MANAGER</span><h2>eSIM / 卡片</h2></div><p>管理卡内 Profile，并核对模块实际接管状态。</p></div>
+      <div class="section-heading">
+        <h2>eSIM Profile</h2>
+        <button id="refresh-esim" class="secondary">刷新</button>
+      </div>
+      <p id="esim-status" class="inline-status">仅在 SIM 卡槽中插入 eUICC/eSIM 卡片时使用；普通实体 SIM 可以忽略。</p>
+      <details id="esim-download-section" class="fold-panel esim-download">
+        <summary><span>下载新 Profile</span><small>SM-DP+ 激活信息</small></summary>
+        <form id="esim-download-form" class="esim-download-grid">
+          <input id="esim-smdp" placeholder="SM-DP+ 地址" required>
+          <input id="esim-matching-id" placeholder="Matching ID（可选）">
+          <input id="esim-confirmation-code" placeholder="确认码（可选）">
+          <input id="esim-imei" inputmode="numeric" maxlength="15" placeholder="模块 IMEI（必填）" required>
+          <input id="esim-aid" placeholder="目标 eUICC AID（可选）">
+          <button type="submit">开始下载</button>
+        </form>
+        <p id="esim-download-status" class="inline-status">填写运营商提供的激活信息后才会执行下载。</p>
+      </details>
+
+      <details id="esim-profile-panel" class="profile-panel" open>
+        <summary class="profile-panel-heading"><span class="profile-panel-title"><span class="section-kicker">INSTALLED PROFILES</span><strong>已安装的 Profile</strong></span><small>启用、改名或删除卡内 Profile。</small></summary>
+        <div class="profile-panel-content">
+        <details class="fold-panel">
+          <summary><span>卡片概览</span><small>卡类型、固件、EID</small></summary>
+          <div id="esim-chip" class="diagnostic-grid" hidden></div>
+        </details>
+        <details id="esim-runtime-section" class="fold-panel" hidden>
+          <summary><span>当前 Profile 运行状态</span><small>自动刷新</small></summary>
+          <div id="esim-runtime" class="diagnostic-grid"></div>
+        </details>
+        <details id="esim-phonebook-section" class="fold-panel" hidden>
+          <summary><span>卡片通讯录兼容性</span><small>只读检测</small></summary>
+          <div class="phonebook-probe">
+            <p id="esim-phonebook-status" class="inline-status">检测当前 Profile 是否支持卡内通讯录；不会写入联系人。</p>
+            <button id="probe-esim-phonebook" class="secondary compact" type="button">检测当前卡片</button>
+            <div id="esim-phonebook-result" class="phonebook-result" hidden></div>
+          </div>
+        </details>
+        <div id="esim-list" class="list empty">尚未读取 eUICC/eSIM 卡片</div>
+        </div>
+      </details>
+    </section>
+
+    <section id="network" class="view">
+      <div class="view-intro"><div><span class="section-kicker">USB NETWORK</span><h2>网络诊断</h2></div><p>检查蜂窝注册、USB 网卡与默认出口。</p></div>
+      <div class="section-heading">
+        <h2>网络诊断</h2>
+        <button id="refresh-network" class="secondary" type="button">刷新</button>
+      </div>
+      <p id="network-status" class="inline-status">尚未读取网络状态</p>
+      <div id="network-grid" class="diagnostic-grid"></div>
+      <h2 class="subheading">连通性检测</h2>
+      <div class="control-panel">
+        <button id="check-4g-route" class="secondary" type="button">检测 4G 出口</button>
+        <button id="check-proxy-route" class="secondary" type="button">检测代理</button>
+      </div>
+      <div id="network-checks" class="list empty">尚未检测</div>
+      <h2 class="subheading">USB 网卡模式</h2>
+      <div class="control-panel">
+		<button id="usbnet-mode-0" class="secondary" type="button">模式 0 · QMI（短信/管理）</button>
+		<button id="usbnet-mode-1" class="secondary" type="button">模式 1 · ECM（4G 网卡）</button>
+		<button id="reboot-module" class="secondary danger" type="button">重启模块</button>
+	  </div>
+	  <p id="usb-mode-help" class="inline-status">模式 0 是 QMI，macOS 没有对应驱动，适合短信和 AT 管理；模式 1 是 CDC-ECM，macOS 免驱识别为网卡。切换后需要重启模块生效。</p>
+      <h2 class="subheading">macOS 网络接口</h2>
+      <div id="network-interfaces" class="list empty">尚未读取接口</div>
+    </section>
+
+    <section id="notifications" class="view">
+      <div class="view-intro"><div><span class="section-kicker">NOTIFICATIONS</span><h2>提醒通道</h2></div><p>转发渠道在 WebUI 关闭后仍可接收提醒。</p></div>
+      <form id="notification-form" class="settings-form">
+        <section class="settings-section">
+          <div class="settings-heading"><div><h2>事件</h2><p>选择需要进入提醒通道的事件。</p></div></div>
+          <div class="toggle-grid">
+            <label class="toggle-row"><input id="notify-incoming-call" type="checkbox"><span><strong>来电</strong><small>检测到响铃或呼叫等待</small></span></label>
+            <label class="toggle-row"><input id="notify-missed-call" type="checkbox"><span><strong>未接来电</strong><small>响铃结束且未接通</small></span></label>
+            <label class="toggle-row"><input id="notify-sms" type="checkbox"><span><strong>新短信</strong><small>忽略启动时读取的存量短信</small></span></label>
+            <label class="toggle-row"><input id="include-caller-number" type="checkbox"><span><strong>包含来电号码</strong><small>会发送给已启用的第三方通道</small></span></label>
+            <label class="toggle-row"><input id="include-sms-body" type="checkbox"><span><strong>包含短信正文</strong><small>关闭时只发送发件人</small></span></label>
+            <label class="toggle-row"><input id="browser-notifications" type="checkbox"><span><strong>浏览器提醒</strong><small id="browser-notification-status">仅在本页面打开时生效</small></span></label>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-heading">
+            <div><span class="section-kicker">CHANNELS</span><h2>转发渠道</h2></div>
+            <div class="channel-add">
+              <select id="channel-type" aria-label="渠道类型"></select>
+              <button id="add-channel" class="secondary compact" type="button">添加</button>
+            </div>
+          </div>
+          <div id="channel-list" class="channel-list"></div>
+          <p id="channel-empty" class="inline-status">还没有配置转发渠道。选择类型后点「添加」。</p>
+        </section>
+
+        <div class="settings-actions">
+          <button id="test-notifications" class="secondary" type="button">保存并测试</button>
+          <button id="save-notifications" type="submit">保存设置</button>
+        </div>
+        <p id="notification-save-status" class="inline-status">同一类型可以配置多条。凭据只保存在本机配置文件，页面不会回显。</p>
+      </form>
+    </section>
+
+    <section id="at" class="view">
+      <div class="view-intro"><div><span class="section-kicker">ADVANCED DIAGNOSTICS</span><h2>AT 调试</h2></div><p>直接向模块发送 AT 指令。</p></div>
+      <form id="at-form" class="toolbar">
+        <input id="at-command" type="text" value="AT+CSQ" spellcheck="false" required>
+        <button type="submit">执行</button>
+      </form>
+      <pre id="at-output">等待命令</pre>
+    </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="app-modal" class="modal-backdrop" hidden>
+    <form id="modal-form" class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-heading">
+        <h2 id="modal-title">确认操作</h2>
+        <button id="modal-close" class="secondary modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p id="modal-message" class="modal-message" hidden></p>
+      <div id="modal-fields" class="modal-fields"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="secondary" type="button">取消</button>
+        <button id="modal-confirm" type="submit">确定</button>
+      </div>
+    </form>
+  </div>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

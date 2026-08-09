@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    target-branch: "master"
+    labels:
+      - "go"
+      - "dependencies"
+      - "dependabot"
+  - package-ecosystem: "gomod"
+    directory: "/bench"
+    schedule:
+      interval: "daily"
+    target-branch: "master"
+    labels:
+      - "go"
+      - "dependencies"
+      - "dependabot"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    target-branch: "master"
+    labels:
+      - "github-actions"
+      - "dependencies"
+      - "dependabot"

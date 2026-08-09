@@ -1,0 +1,362 @@
+#!/bin/sh
+set -u
+
+SOURCE=$0
+while [ -L "${SOURCE}" ]; do
+  SOURCE_DIR=$(CDPATH= cd -P -- "$(dirname -- "${SOURCE}")" && pwd)
+  SOURCE=$(readlink "${SOURCE}")
+  case "${SOURCE}" in
+    /*) ;;
+    *) SOURCE="${SOURCE_DIR}/${SOURCE}" ;;
+  esac
+done
+ROOT_DIR=$(CDPATH= cd -P -- "$(dirname -- "${SOURCE}")" && pwd)
+BINARY="${ROOT_DIR}/bin/modemcat-macos"
+URL="http://127.0.0.1:7575"
+DATA_DIR="${HOME}/Library/Application Support/ModemCat"
+LOG_DIR="${HOME}/Library/Logs/ModemCat"
+PID_FILE="${DATA_DIR}/modemcat.pid"
+LOG_FILE="${LOG_DIR}/modemcat.log"
+PUBLIC_ORIGIN_FILE="${DATA_DIR}/public-origin"
+LAUNCH_AGENT_LABEL="com.modemcat.webui"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
+
+usage() {
+  cat <<'EOF'
+ModemCat for macOS
+
+用法：
+  modemcat start          启动并自动打开管理网页
+  modemcat start --demo   启动无硬件演示模式
+  modemcat stop           停止正在运行的程序
+  modemcat status         查看运行状态
+  modemcat logs           查看实时日志（Ctrl+C 退出日志）
+  modemcat open           打开管理网页
+  modemcat cloudflare URL 设置允许的 Cloudflare HTTPS 域名
+  modemcat cloudflare off 关闭 Cloudflare 公网来源
+  modemcat service install 安装并启动登录后自动运行的后台服务
+  modemcat service remove  停止并移除后台服务
+  modemcat service status  查看后台服务状态
+EOF
+}
+
+read_pid() {
+  if [ -f "${PID_FILE}" ]; then
+    tr -cd '0-9' <"${PID_FILE}"
+  fi
+}
+
+is_running() {
+  pid=$(read_pid)
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  command_line=$(ps -p "${pid}" -o command= 2>/dev/null || true)
+  case "${command_line}" in
+    */bin/modemcat-macos*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+clean_stale_pid() {
+  if [ -f "${PID_FILE}" ] && ! is_running; then
+    rm -f "${PID_FILE}"
+  fi
+}
+
+launch_agent_loaded() {
+  launchctl print "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1
+}
+
+open_page() {
+  if [ "${MODEMCAT_NO_OPEN:-0}" = "1" ]; then
+    return 0
+  fi
+  open "${URL}" >/dev/null 2>&1 || {
+    printf '请在浏览器中打开：%s\n' "${URL}"
+  }
+}
+
+start_service() {
+  mode=${1:-}
+  if [ ! -x "${BINARY}" ]; then
+    printf '启动失败：缺少可执行文件 %s\n' "${BINARY}" >&2
+    exit 1
+  fi
+  if [ "$(uname -m)" != "arm64" ]; then
+    printf '当前发行包仅支持 Apple Silicon（M 系列芯片）。\n' >&2
+    exit 1
+  fi
+
+  mkdir -p "${DATA_DIR}" "${LOG_DIR}"
+  if [ -f "${LOG_FILE}" ] && [ "$(wc -c <"${LOG_FILE}")" -gt 5242880 ]; then
+    mv -f "${LOG_FILE}" "${LOG_FILE}.1"
+  fi
+  clean_stale_pid
+  if launch_agent_loaded; then
+    printf 'ModemCat 后台服务已启用，正在打开管理网页。\n'
+    launchctl kickstart "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+    open_page
+    exit 0
+  fi
+  if is_running; then
+    printf 'ModemCat 已在运行，正在打开管理网页。\n'
+    open_page
+    exit 0
+  fi
+
+  if /usr/sbin/lsof -nP -iTCP:7575 -sTCP:LISTEN >/dev/null 2>&1; then
+    printf '启动失败：端口 7575 已被其他程序占用。\n' >&2
+    exit 1
+  fi
+
+  public_origin=""
+  if [ -f "${PUBLIC_ORIGIN_FILE}" ]; then
+    public_origin=$(head -n 1 "${PUBLIC_ORIGIN_FILE}")
+  fi
+  if [ "${mode}" = "--demo" ] && [ -n "${public_origin}" ]; then
+    "${BINARY}" -listen 127.0.0.1:7575 -demo -public-origin "${public_origin}" >>"${LOG_FILE}" 2>&1 &
+  elif [ "${mode}" = "--demo" ]; then
+    "${BINARY}" -listen 127.0.0.1:7575 -demo >>"${LOG_FILE}" 2>&1 &
+  elif [ -n "${public_origin}" ]; then
+    "${BINARY}" -listen 127.0.0.1:7575 -public-origin "${public_origin}" >>"${LOG_FILE}" 2>&1 &
+  else
+    "${BINARY}" -listen 127.0.0.1:7575 >>"${LOG_FILE}" 2>&1 &
+  fi
+  child=$!
+  printf '%s\n' "${child}" >"${PID_FILE}"
+
+  stopping=0
+  stop_child() {
+    if [ "${stopping}" -eq 0 ]; then
+      stopping=1
+      printf '\n正在停止 ModemCat...\n'
+      kill -TERM "${child}" 2>/dev/null || true
+    fi
+  }
+  trap stop_child INT TERM HUP
+  trap 'rm -f "${PID_FILE}"' EXIT
+
+  ready=0
+  attempts=0
+  while [ "${attempts}" -lt 50 ]; do
+    if ! kill -0 "${child}" 2>/dev/null; then
+      break
+    fi
+    if /usr/bin/curl -fsS --max-time 1 "${URL}/" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    attempts=$((attempts + 1))
+    sleep 0.2
+  done
+
+  if [ "${ready}" -eq 1 ]; then
+    printf 'ModemCat 已启动：%s\n' "${URL}"
+    printf '日志文件：%s\n' "${LOG_FILE}"
+    printf '按 Ctrl+C 即可停止。\n'
+    open_page
+  else
+    printf 'ModemCat 未能正常启动，请查看日志：%s\n' "${LOG_FILE}" >&2
+  fi
+
+  wait "${child}"
+  status=$?
+  trap - INT TERM HUP
+  if [ "${stopping}" -eq 0 ] && [ "${status}" -ne 0 ]; then
+    printf 'ModemCat 异常退出（状态码 %s），请查看日志：%s\n' "${status}" "${LOG_FILE}" >&2
+  else
+    printf 'ModemCat 已停止。\n'
+  fi
+  exit "${status}"
+}
+
+run_launch_agent() {
+  public_origin=""
+  if [ -f "${PUBLIC_ORIGIN_FILE}" ]; then
+    public_origin=$(head -n 1 "${PUBLIC_ORIGIN_FILE}")
+  fi
+  if [ -n "${public_origin}" ]; then
+    exec "${BINARY}" -listen 127.0.0.1:7575 -public-origin "${public_origin}"
+  fi
+  exec "${BINARY}" -listen 127.0.0.1:7575
+}
+
+install_launch_agent() {
+  if [ ! -x "${BINARY}" ]; then
+    printf '安装后台服务失败：缺少可执行文件 %s\n' "${BINARY}" >&2
+    exit 1
+  fi
+  mkdir -p "${DATA_DIR}" "${LOG_DIR}" "${HOME}/Library/LaunchAgents"
+  chmod 700 "${DATA_DIR}"
+  clean_stale_pid
+  if is_running; then
+    foreground_pid=$(read_pid)
+    kill -TERM "${foreground_pid}" 2>/dev/null || true
+    attempts=0
+    while kill -0 "${foreground_pid}" 2>/dev/null && [ "${attempts}" -lt 50 ]; do
+      attempts=$((attempts + 1))
+      sleep 0.1
+    done
+    if kill -0 "${foreground_pid}" 2>/dev/null; then
+      printf '安装后台服务失败：前台 ModemCat 尚未退出。\n' >&2
+      exit 1
+    fi
+    rm -f "${PID_FILE}"
+  fi
+
+  temporary_agent="${LAUNCH_AGENT}.tmp.$$"
+  plutil -create xml1 "${temporary_agent}" || exit 1
+  plutil -insert Label -string "${LAUNCH_AGENT_LABEL}" "${temporary_agent}" || exit 1
+  plutil -insert ProgramArguments -xml '<array/>' "${temporary_agent}" || exit 1
+  plutil -insert ProgramArguments.0 -string "${SOURCE}" "${temporary_agent}" || exit 1
+  plutil -insert ProgramArguments.1 -string service-run "${temporary_agent}" || exit 1
+  plutil -insert RunAtLoad -bool true "${temporary_agent}" || exit 1
+  plutil -insert KeepAlive -bool true "${temporary_agent}" || exit 1
+  plutil -insert ProcessType -string Background "${temporary_agent}" || exit 1
+  plutil -insert StandardOutPath -string "${LOG_FILE}" "${temporary_agent}" || exit 1
+  plutil -insert StandardErrorPath -string "${LOG_FILE}" "${temporary_agent}" || exit 1
+  mv -f "${temporary_agent}" "${LAUNCH_AGENT}" || exit 1
+  chmod 600 "${LAUNCH_AGENT}"
+
+  launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "${LAUNCH_AGENT}" || exit 1
+  launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" || exit 1
+
+  attempts=0
+  while [ "${attempts}" -lt 50 ]; do
+    if /usr/bin/curl -fsS --max-time 1 "${URL}/api/health" >/dev/null 2>&1; then
+      printf 'ModemCat 后台服务已安装并启动：%s\n' "${URL}"
+      return
+    fi
+    attempts=$((attempts + 1))
+    sleep 0.2
+  done
+  printf '后台服务已安装，但 WebUI 尚未就绪，请查看日志：%s\n' "${LOG_FILE}" >&2
+  exit 1
+}
+
+remove_launch_agent() {
+  launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+  rm -f "${LAUNCH_AGENT}"
+  printf 'ModemCat 后台服务已停止并移除。\n'
+}
+
+show_launch_agent_status() {
+  if ! launch_agent_loaded; then
+    printf 'ModemCat 后台服务尚未安装或没有运行。\n'
+    return
+  fi
+  service_pid=$(launchctl print "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" 2>/dev/null | awk '/pid =/ { print $3; exit }')
+  if [ -n "${service_pid}" ]; then
+    printf 'ModemCat 后台服务正在运行（PID %s）\n' "${service_pid}"
+    printf '管理网页：%s\n' "${URL}"
+  else
+    printf 'ModemCat 后台服务已加载，正在等待启动。\n'
+  fi
+}
+
+configure_cloudflare() {
+  origin=${1:-}
+  if [ -z "${origin}" ]; then
+    printf '请提供完整 HTTPS 域名，例如：https://modemcat.example.com\n' >&2
+    exit 2
+  fi
+  mkdir -p "${DATA_DIR}"
+  chmod 700 "${DATA_DIR}"
+  if [ "${origin}" = "off" ]; then
+    rm -f "${PUBLIC_ORIGIN_FILE}"
+    if launch_agent_loaded; then
+      launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+      printf 'Cloudflare 公网来源已关闭，后台服务已重启。\n'
+    else
+      printf 'Cloudflare 公网来源已关闭；重启 ModemCat 后生效。\n'
+    fi
+    return
+  fi
+  case "${origin}" in
+    https://*) ;;
+    *) printf 'Cloudflare 域名必须使用 https:// 开头。\n' >&2; exit 2 ;;
+  esac
+  case "${origin}" in
+    *[[:space:]]*) printf 'Cloudflare 域名不能包含空白字符。\n' >&2; exit 2 ;;
+  esac
+  umask 077
+  temporary="${PUBLIC_ORIGIN_FILE}.tmp.$$"
+  printf '%s\n' "${origin}" >"${temporary}"
+  mv -f "${temporary}" "${PUBLIC_ORIGIN_FILE}"
+  if launch_agent_loaded; then
+    launchctl kickstart -k "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+    printf 'Cloudflare 公网来源已设置为 %s，后台服务已重启。\n' "${origin}"
+  else
+    printf 'Cloudflare 公网来源已设置为 %s；重启 ModemCat 后生效。\n' "${origin}"
+  fi
+}
+
+stop_service() {
+  if launch_agent_loaded; then
+    launchctl bootout "gui/$(id -u)/${LAUNCH_AGENT_LABEL}" >/dev/null 2>&1 || true
+    printf 'ModemCat 后台服务已停止；执行 modemcat service install 可重新启用。\n'
+    exit 0
+  fi
+  clean_stale_pid
+  if ! is_running; then
+    printf 'ModemCat 当前没有运行。\n'
+    exit 0
+  fi
+  pid=$(read_pid)
+  kill -TERM "${pid}" 2>/dev/null || true
+  attempts=0
+  while kill -0 "${pid}" 2>/dev/null && [ "${attempts}" -lt 50 ]; do
+    attempts=$((attempts + 1))
+    sleep 0.1
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    printf 'ModemCat 尚未退出，请回到启动它的终端按 Ctrl+C。\n' >&2
+    exit 1
+  fi
+  rm -f "${PID_FILE}"
+  printf 'ModemCat 已停止。\n'
+}
+
+show_status() {
+  if launch_agent_loaded; then
+    show_launch_agent_status
+    return
+  fi
+  clean_stale_pid
+  if is_running; then
+    printf 'ModemCat 正在运行（PID %s）\n' "$(read_pid)"
+    printf '管理网页：%s\n' "${URL}"
+  else
+    printf 'ModemCat 当前没有运行。\n'
+  fi
+}
+
+case "${1:-}" in
+  start)
+    case "${2:-}" in
+      ""|--demo) start_service "${2:-}" ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  stop) stop_service ;;
+  status) show_status ;;
+  logs)
+    mkdir -p "${LOG_DIR}"
+    touch "${LOG_FILE}"
+    tail -n 100 -f "${LOG_FILE}"
+    ;;
+  cloudflare) configure_cloudflare "${2:-}" ;;
+  service)
+    case "${2:-}" in
+      install) install_launch_agent ;;
+      remove) remove_launch_agent ;;
+      status) show_launch_agent_status ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  service-run) run_launch_agent ;;
+  open) open_page ;;
+  help|-h|--help|"") usage ;;
+  *) usage; exit 2 ;;
+esac

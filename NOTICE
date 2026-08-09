@@ -1,0 +1,14 @@
+ModemCat
+
+ModemCat is an independently maintained project derived from work in VoHive
+and DJOneHub. The current modifications are maintained at:
+
+https://github.com/SuInk/modemcat
+
+The project remains distributed under the PolyForm Noncommercial License 1.0.0
+in LICENSE. The upstream required notice is retained unchanged:
+
+Required Notice: Copyright iniwex5 (https://github.com/iniwex5/vohive)
+
+Third-party components retain their respective copyright and license notices.
+See THIRD_PARTY_NOTICES.md and the license files under third_party/.

@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+SOURCE=$0
+while [ -L "${SOURCE}" ]; do
+  SOURCE_DIR=$(CDPATH= cd -P -- "$(dirname -- "${SOURCE}")" && pwd)
+  SOURCE=$(readlink "${SOURCE}")
+  case "${SOURCE}" in
+    /*) ;;
+    *) SOURCE="${SOURCE_DIR}/${SOURCE}" ;;
+  esac
+done
+PACKAGE_DIR=$(CDPATH= cd -P -- "$(dirname -- "${SOURCE}")" && pwd)
+INSTALL_DIR=${MODEMCAT_INSTALL_DIR:-/usr/local/libexec/modemcat}
+COMMAND_PATH=${MODEMCAT_COMMAND_PATH:-/usr/local/bin/modemcat}
+
+run_privileged() {
+  if [ "${MODEMCAT_INSTALL_NO_SUDO:-0}" = "1" ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+if [ "$(uname -m)" != "arm64" ]; then
+  echo "当前安装包仅支持 Apple Silicon（M 系列芯片）。" >&2
+  exit 1
+fi
+if [ ! -x "${PACKAGE_DIR}/modemcat" ] || [ ! -x "${PACKAGE_DIR}/bin/modemcat-macos" ]; then
+  echo "安装失败：发行包内容不完整，请重新解压整个 ZIP。" >&2
+  exit 1
+fi
+
+if [ -x "${COMMAND_PATH}" ]; then
+  "${COMMAND_PATH}" stop >/dev/null 2>&1 || true
+fi
+
+echo "ModemCat 将安装到 ${INSTALL_DIR}"
+echo "macOS 可能要求输入当前用户的管理员密码。"
+
+run_privileged mkdir -p "${INSTALL_DIR}" "$(dirname -- "${COMMAND_PATH}")"
+run_privileged ditto --norsrc --noextattr --noqtn --noacl "${PACKAGE_DIR}" "${INSTALL_DIR}"
+run_privileged chmod 755 "${INSTALL_DIR}/modemcat" "${INSTALL_DIR}/bin/modemcat-macos" "${INSTALL_DIR}/lib/libusb-1.0.0.dylib"
+run_privileged ln -sfn "${INSTALL_DIR}/modemcat" "${COMMAND_PATH}"
+
+echo
+echo "ModemCat 安装完成。现在可以在任意目录执行："
+echo "  modemcat start"
+echo
+echo "停止程序："
+echo "  modemcat stop"

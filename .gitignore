@@ -1,0 +1,24 @@
+.DS_Store
+._*
+
+# Build outputs
+/dist/
+/bin/
+*.test
+*.out
+
+# Local runtime data and logs
+*.log
+*.pid
+/tmp/
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+
+# Frontend dependencies are not used by the embedded ModemCat page
+node_modules/
+
+# go build ./cmd/... 会在仓库根生成同名二进制
+/modemcatd
