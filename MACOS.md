@@ -91,9 +91,16 @@ SIM, send messages or switch a physical eSIM profile.
 
 ## Launch at login
 
+From the extracted release directory (or with `modemcat` on your `PATH` after
+running `./install`):
+
 ```sh
-./scripts/install-macos.sh
+./modemcat service install
 ```
+
+This installs a user LaunchAgent (`com.modemcat.webui`) that starts ModemCat
+after login and restarts it if it exits. Use `./modemcat service status` to
+check it and `./modemcat service remove` to uninstall it.
 
 Logs are written to `~/Library/Logs/ModemCat`.
 
