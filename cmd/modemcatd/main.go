@@ -84,6 +84,7 @@ type app struct {
 	esimSwitchAllowed bool
 	usbAT             *usbAT
 	usbATMu           sync.RWMutex
+	usbATCommandMu    sync.Mutex
 	usbDeviceMu       sync.RWMutex
 	port              string
 	demo              bool
@@ -96,7 +97,6 @@ type app struct {
 	smsMu                 sync.RWMutex
 	sms                   []receivedSMS
 	smsSendMu             sync.Mutex
-	smsReassembler        *smscodec.Reassembler
 	smsNotificationsReady bool
 	smsStorePath          string
 	smsStoreError         string
@@ -265,8 +265,7 @@ func main() {
 				usbDevice:        usbDevice,
 				usbAT:            usbATDevice,
 				smsPollInterval:  8 * time.Second,
-				smsAutoCleanupME: false,
-				smsReassembler:   smscodec.NewReassembler(),
+				smsAutoCleanupME: true,
 				callPollInterval: 2 * time.Second,
 			}
 			if usbDevice != nil {
@@ -785,7 +784,11 @@ func (a *app) pollSMSOnce() error {
 		a.setSMSPollStatus(err)
 		return err
 	}
-	messages, err := a.readUSBATSMS()
+	// Storage selection, reading, and indexed cleanup must not interleave
+	// with a refresh, manual cleanup, or an AT command selecting another memory.
+	a.usbATCommandMu.Lock()
+	defer a.usbATCommandMu.Unlock()
+	messages, cleanup, err := a.readUSBATSMS()
 	if err != nil {
 		a.resetUSBATIfGone(err)
 		a.setSMSPollStatus(err)
@@ -794,11 +797,9 @@ func (a *app) pollSMSOnce() error {
 	newCount, total, persisted := a.mergeSMS(messages, true)
 	a.markSMSNotificationsReady()
 	if shouldAutoCleanupME(a.smsAutoCleanupME, persisted, len(messages)) {
-		before, after, cleanupErr := a.clearUSBATSMSMemory("ME")
-		if cleanupErr != nil {
-			log.Printf("auto cleanup ME SMS failed: %v", cleanupErr)
-		} else if before != after {
-			log.Printf("auto cleanup ME SMS: %d -> %d", before, after)
+		if err := a.cleanupPersistedUSBATSMS(cleanup); err != nil {
+			a.setSMSPollStatus(err)
+			return err
 		}
 	}
 	a.setSMSPollStatus(nil)
@@ -813,7 +814,7 @@ func shouldAutoCleanupME(enabled, persisted bool, messageCount int) bool {
 }
 
 func (a *app) ensureUSBAT() error {
-	if a.demo || a.modem != nil {
+	if a.demo || a.modem != nil || a.atCommandOverride != nil {
 		return nil
 	}
 	a.usbATMu.Lock()
@@ -899,6 +900,15 @@ func (a *app) hasUSBAT() bool {
 }
 
 func (a *app) commandUSBAT(command string, timeout time.Duration) (string, error) {
+	a.usbATCommandMu.Lock()
+	defer a.usbATCommandMu.Unlock()
+	return a.commandUSBATLocked(command, timeout)
+}
+
+func (a *app) commandUSBATLocked(command string, timeout time.Duration) (string, error) {
+	if a.atCommandOverride != nil {
+		return a.atCommandOverride(command, timeout)
+	}
 	a.usbATMu.RLock()
 	defer a.usbATMu.RUnlock()
 	if a.usbAT == nil {
@@ -908,6 +918,8 @@ func (a *app) commandUSBAT(command string, timeout time.Duration) (string, error
 }
 
 func (a *app) commandUSBATWithPrompt(command string, followUp []byte, timeout time.Duration) (string, error) {
+	a.usbATCommandMu.Lock()
+	defer a.usbATCommandMu.Unlock()
 	a.usbATMu.RLock()
 	defer a.usbATMu.RUnlock()
 	if a.usbAT == nil {
@@ -1541,90 +1553,18 @@ func parseModuleUSBMode(resp string, family modem.ATFamily) (int, bool) {
 	return mode, err == nil
 }
 
-func (a *app) readUSBATSMS() ([]receivedSMS, error) {
-	if _, err := a.commandUSBAT("AT+CMGF=0", 3*time.Second); err != nil {
-		return nil, fmt.Errorf("set SMS PDU mode: %w", err)
-	}
-	memories := []string{"SM", "ME"}
-	seen := make(map[string]bool)
-	messages := make([]receivedSMS, 0)
-	var errs []string
-	for _, memory := range memories {
-		items, err := a.readUSBATSMSFromMemory(memory)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", memory, err))
-			continue
-		}
-		for _, item := range items {
-			key := item.Sender + "\x00" + item.Content + "\x00" + item.Timestamp.Format(time.RFC3339Nano)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			messages = append(messages, item)
-		}
-	}
-	if len(messages) == 0 && len(errs) == len(memories) {
-		return nil, fmt.Errorf("list SMS failed: %s", strings.Join(errs, "; "))
-	}
-	sort.SliceStable(messages, func(i, j int) bool {
-		return messages[i].Timestamp.After(messages[j].Timestamp)
-	})
-	return messages, nil
-}
-
-func (a *app) readUSBATSMSFromMemory(memory string) ([]receivedSMS, error) {
-	if _, err := a.commandUSBAT(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second); err != nil {
-		return nil, fmt.Errorf("select storage: %w", err)
-	}
-	resp, err := a.commandUSBAT("AT+CMGL=4", 15*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("list SMS: %w", err)
-	}
-	pdus := parseUSBATCMGL(resp)
-	messages := make([]receivedSMS, 0, len(pdus))
-	for _, item := range pdus {
-		msg, concat, err := decodeUSBATPDU(item.header, item.pdu)
-		if err != nil {
-			messages = append(messages, receivedSMS{
-				Sender:    "PDU",
-				Content:   fmt.Sprintf("[短信解析失败] %v\n%s", err, item.pdu),
-				Timestamp: time.Now(),
-			})
-			continue
-		}
-		if concat.IsConcat {
-			if a.smsReassembler == nil {
-				a.smsReassembler = smscodec.NewReassembler()
-			}
-			complete, content := a.smsReassembler.Add(msg.Sender, concat, msg.Content)
-			if !complete {
-				continue
-			}
-			msg.Content = content
-			log.Printf("USB AT long SMS reassembled: sender=%s segments=%d", msg.Sender, concat.Total)
-		}
-		messages = append(messages, msg)
-	}
-	if a.smsReassembler != nil {
-		a.smsReassembler.Cleanup(10 * time.Minute)
-	}
-	sort.SliceStable(messages, func(i, j int) bool {
-		return messages[i].Timestamp.After(messages[j].Timestamp)
-	})
-	return messages, nil
-}
-
 func (a *app) clearUSBATSMSMemory(memory string) (before, after int, err error) {
-	resp, err := a.commandUSBAT(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
+	a.usbATCommandMu.Lock()
+	defer a.usbATCommandMu.Unlock()
+	resp, err := a.commandUSBATSMSLocked(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
 	if err != nil {
 		return 0, 0, fmt.Errorf("select storage: %w", err)
 	}
 	before = parseUSBATCPMSUsed(resp)
-	if _, err := a.commandUSBAT("AT+CMGD=1,4", 20*time.Second); err != nil {
+	if _, err := a.commandUSBATSMSLocked("AT+CMGD=1,4", 20*time.Second); err != nil {
 		return before, 0, fmt.Errorf("delete messages: %w", err)
 	}
-	resp, err = a.commandUSBAT(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
+	resp, err = a.commandUSBATSMSLocked(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, memory, memory, memory), 5*time.Second)
 	if err != nil {
 		return before, 0, fmt.Errorf("recheck storage: %w", err)
 	}
@@ -1646,15 +1586,21 @@ func parseUSBATCPMSUsed(resp string) int {
 }
 
 type usbATSMSPDU struct {
+	index  int
+	memory string
 	header string
 	pdu    string
 }
 
 func parseUSBATCMGL(resp string) []usbATSMSPDU {
+	return parseUSBATSMSPDUs(resp, "+CMGL:")
+}
+
+func parseUSBATSMSPDUs(resp, prefix string) []usbATSMSPDU {
 	lines := splitATLines(resp)
 	var out []usbATSMSPDU
 	for i := 0; i < len(lines)-1; i++ {
-		if !strings.HasPrefix(lines[i], "+CMGL:") {
+		if !strings.HasPrefix(lines[i], prefix) {
 			continue
 		}
 		next := strings.TrimSpace(lines[i+1])
@@ -1662,7 +1608,15 @@ func parseUSBATCMGL(resp string) []usbATSMSPDU {
 			continue
 		}
 		pdu, _ := smscodec.TrimFullPDUHexByATHeader(next, lines[i])
-		out = append(out, usbATSMSPDU{header: lines[i], pdu: pdu})
+		index := -1
+		if prefix == "+CMGL:" {
+			if token, _, ok := strings.Cut(strings.TrimPrefix(lines[i], prefix), ","); ok {
+				if parsed, err := strconv.Atoi(strings.TrimSpace(token)); err == nil && parsed >= 0 {
+					index = parsed
+				}
+			}
+		}
+		out = append(out, usbATSMSPDU{index: index, header: lines[i], pdu: pdu})
 		i++
 	}
 	return out
