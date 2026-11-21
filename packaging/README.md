@@ -89,7 +89,7 @@ xattr -dr com.apple.quarantine ./modemcat ./bin ./lib
 
 WebUI 会显示来电和最近记录，并可拒接当前来电。提醒页面可分别启用浏览器通知、Bark 和 Telegram Bot；Bark 与 Telegram 在 WebUI 关闭后仍由本地后台发送。
 
-短信收件箱会把最近 500 条记录持久保存到 `~/Library/Application Support/ModemCat/sms-inbox.json`，服务或 Mac 重启后仍会恢复，文件权限为 `0600`。模块 `ME` 自动清理默认关闭；手动清理模块 `ME` 不会删除本地历史或 SIM 卡 `SM` 短信。
+短信收件箱会把最近 500 条记录持久保存到 `~/Library/Application Support/ModemCat/sms-inbox.json`，服务或 Mac 重启后仍会恢复，文件权限为 `0600`。USB AT 接收默认逐条清理模块 `ME` 中已完整接收并成功保存到本地的短信，避免存满后阻断新短信。保存失败、长短信未收齐或无法解析时保留对应模块短信；SIM 卡 `SM` 短信和本地历史不受影响。手动清空整个模块 `ME` 仍需要用户确认。
 
 通知凭据保存在 `~/Library/Application Support/ModemCat/notifications.json`，文件权限为 `0600`。Bark 填写完整的 `https://api.day.app/你的Key/` 地址，页面不会回传已保存的完整地址。短信正文默认不发送给第三方，Bark 和 Telegram 也默认关闭。
 
